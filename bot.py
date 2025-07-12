@@ -3,24 +3,23 @@ import logging
 from datetime import datetime, timedelta
 import pytz
 from pymongo import MongoClient
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler, # Import CallbackQueryHandler
-    filters,
-    ContextTypes,
+from pyrogram import Client, filters
+from pyrogram.types import (
+    Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 )
-from telegram.ext.filters import ChatType # Import ChatType explicitly
 import uuid
 import re
-import asyncio # Import asyncio for scheduling tasks
+import asyncio
 
 # --- Configuration ---
 class BotConfig:
     # Your Subscription Bot's Token (from BotFather for this bot)
     BOT_TOKEN = '7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk' # REPLACE WITH YOUR SUBSCRIPTION BOT'S TOKEN
+
+    # Your Telegram API ID and API Hash (MANDATORY for Pyrogram)
+    # Get these from my.telegram.org
+    API_ID = 29800015 # REPLACE WITH YOUR API_ID
+    API_HASH = 'c8f37108be31ab9ea2818bfe533fbb6f' # REPLACE WITH YOUR API_HASH
 
     # Your MongoDB URI (MUST be the SAME as your File-Sharing Bot's MONGO_URI)
     MONGO_URI = 'mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0' # REPLACE WITH YOUR ACTUAL MONGO_URI
@@ -49,16 +48,24 @@ class BotConfig:
 
 try:
     config = BotConfig()
-    if not all([config.BOT_TOKEN, config.MONGO_URI, config.TXN_GROUP_ID]):
-        raise ValueError("One or more essential configuration variables are not set. Please check BOT_TOKEN, MONGO_URI, TXN_GROUP_ID.")
+    if not all([config.BOT_TOKEN, config.API_ID, config.API_HASH, config.MONGO_URI, config.TXN_GROUP_ID]):
+        raise ValueError("One or more essential configuration variables (BOT_TOKEN, API_ID, API_HASH, MONGO_URI, TXN_GROUP_ID) are not set.")
 except Exception as e:
     raise RuntimeError(f"Failed to load bot configuration: {e}")
 
 # --- Logging Setup ---
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# --- Pyrogram Client ---
+app = Client(
+    "subscription_bot", # Session name
+    api_id=config.API_ID,
+    api_hash=config.API_HASH,
+    bot_token=config.BOT_TOKEN
+)
 
 # --- MongoDB Setup ---
 client = None
@@ -66,6 +73,7 @@ db = None
 users_collection = None
 tokens_collection = None
 confirmed_txn_collection = None # New collection instance
+history_collection = None # Assuming a history collection for view counts
 
 try:
     client = MongoClient(config.MONGO_URI)
@@ -73,12 +81,13 @@ try:
     users_collection = db[config.USERS_COLLECTION_NAME]
     tokens_collection = db[config.TOKENS_COLLECTION_NAME]
     confirmed_txn_collection = db[config.CONFIRMED_TXN_COLLECTION_NAME]
+    history_collection = db.get_collection('history') # Get history collection
     
     # Create index on txn_id for faster lookups
     confirmed_txn_collection.create_index([("txn_id", 1)], unique=True)
     
     logger.info(f"MongoDB connected successfully to DB: {config.MONGO_DB_NAME}")
-    logger.info(f"Using collections: {config.USERS_COLLECTION_NAME}, {config.TOKENS_COLLECTION_NAME}, {config.CONFIRMED_TXN_COLLECTION_NAME}")
+    logger.info(f"Using collections: {config.USERS_COLLECTION_NAME}, {config.TOKENS_COLLECTION_NAME}, {config.CONFIRMED_TXN_COLLECTION_NAME}, history")
 except Exception as e:
     logger.critical(f"Error connecting to MongoDB: {e}", exc_info=True)
     client = None # Ensure client is None if connection fails
@@ -138,8 +147,6 @@ def get_user_stats(user_id: int) -> dict:
     else:
         save_limit_display = f"{len(bookmarked_videos)}/{config.FREE_USER_SAVE_LIMIT}"
 
-    # Assuming history_collection exists and stores views
-    history_collection = db.get_collection('history') # Get collection dynamically
     views_doc = history_collection.find_one({'user_id': user_id})
     view_count = len(views_doc['history']) if views_doc and 'history' in views_doc else 0
 
@@ -207,27 +214,28 @@ async def update_premium_status(user_id: int, username: str, duration_days: int)
     
     return expires_at_ist
 
-async def schedule_message_deletion(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay_seconds: int):
+async def schedule_message_deletion(chat_id: int, message_id: int, delay_seconds: int):
     """Schedules a message to be deleted after a specified delay."""
     try:
         await asyncio.sleep(delay_seconds)
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        await app.delete_messages(chat_id=chat_id, message_ids=message_id)
         logger.info(f"Message {message_id} in chat {chat_id} auto-deleted after {delay_seconds} seconds.")
     except Exception as e:
         logger.warning(f"Failed to auto-delete message {message_id} in chat {chat_id}: {e}")
 
-# --- Telegram Bot Handlers ---
+# --- Pyrogram Handlers ---
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+@app.on_message(filters.command("start") & filters.private)
+async def start_command(client: Client, message: Message):
     """Sends a welcome message, user stats, and payment options."""
-    user = update.effective_user
+    user = message.from_user
     username = user.username if user.username else user.first_name
     user_id = user.id
 
     # Fetch user stats
     stats = get_user_stats(user_id)
 
-    message = (
+    message_text = (
         f"👋 Welcome, {username}! ✨\n\n"
         f"📊 <b>Your Current Stats:</b>\n"
         f"<b>Status:</b> {stats['user_status']}\n"
@@ -242,14 +250,25 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         [InlineKeyboardButton("🗓️ Monthly (₹149)", callback_data="pay_monthly")]
     ])
 
-    await update.message.reply_text(message, reply_markup=keyboard, parse_mode="HTML")
+    await message.reply_text(message_text, reply_markup=keyboard, parse_mode="HTML")
     logger.info(f"User {user_id} received start message with stats and payment options.")
 
-async def send_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_type: str) -> None:
-    """Sends the QR code and UPI link for the selected plan."""
-    user = update.effective_user
-    chat_id = update.effective_chat.id
+@app.on_callback_query(filters.regex("^pay_weekly$"))
+async def pay_weekly_callback(client: Client, callback_query: CallbackQuery):
+    """Handles 'Weekly' button click."""
+    await callback_query.answer() # Acknowledge the callback
+    await send_payment_info(client, callback_query.message.chat.id, "Weekly")
+    logger.info(f"User {callback_query.from_user.id} clicked Weekly plan.")
 
+@app.on_callback_query(filters.regex("^pay_monthly$"))
+async def pay_monthly_callback(client: Client, callback_query: CallbackQuery):
+    """Handles 'Monthly' button click."""
+    await callback_query.answer() # Acknowledge the callback
+    await send_payment_info(client, callback_query.message.chat.id, "Monthly")
+    logger.info(f"User {callback_query.from_user.id} clicked Monthly plan.")
+
+async def send_payment_info(client: Client, chat_id: int, plan_type: str):
+    """Sends the QR code and UPI link for the selected plan."""
     message_text = (
         f"To get your {plan_type} premium access, please pay:\n\n"
         f"🔗 {config.UPI_LINK}\n\n"
@@ -258,56 +277,49 @@ async def send_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     )
 
     sent_message = None
-    if config.QR_CODE_IMAGE_URL:
-        sent_message = await context.bot.send_photo(
-            chat_id=chat_id,
-            photo=config.QR_CODE_IMAGE_URL,
-            caption=message_text,
-            parse_mode="HTML"
-        )
-    else:
-        sent_message = await context.bot.send_message(
-            chat_id=chat_id,
-            text=message_text,
-            parse_mode="HTML"
-        )
-    
-    if sent_message:
-        # Schedule deletion of the payment info message
-        create_tracked_task(schedule_message_deletion(context, chat_id, sent_message.message_id, 600)) # 600 seconds = 10 minutes
-        logger.info(f"Payment info sent to user {user.id} for {plan_type} plan. Scheduled for deletion.")
-    else:
-        logger.error(f"Failed to send payment info message to user {user.id}.")
-        await context.bot.send_message(chat_id, "❌ Failed to send payment details. Please try again.")
-
-async def pay_weekly_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles 'Weekly' button click."""
-    await update.callback_query.answer() # Acknowledge the callback
-    await send_payment_info(update, context, "Weekly")
-    logger.info(f"User {update.effective_user.id} clicked Weekly plan.")
-
-async def pay_monthly_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles 'Monthly' button click."""
-    await update.callback_query.answer() # Acknowledge the callback
-    await send_payment_info(update, context, "Monthly")
-    logger.info(f"User {update.effective_user.id} clicked Monthly plan.")
+    try:
+        if config.QR_CODE_IMAGE_URL:
+            sent_message = await client.send_photo(
+                chat_id=chat_id,
+                photo=config.QR_CODE_IMAGE_URL,
+                caption=message_text,
+                parse_mode="HTML"
+            )
+        else:
+            sent_message = await client.send_message(
+                chat_id=chat_id,
+                text=message_text,
+                parse_mode="HTML"
+            )
+        
+        if sent_message:
+            # Schedule deletion of the payment info message
+            create_tracked_task(schedule_message_deletion(chat_id, sent_message.id, 600)) # 600 seconds = 10 minutes
+            logger.info(f"Payment info sent to chat {chat_id} for {plan_type} plan. Scheduled for deletion.")
+        else:
+            logger.error(f"Failed to send payment info message to chat {chat_id}.")
+            await client.send_message(chat_id, "❌ Failed to send payment details. Please try again.")
+    except Exception as e:
+        logger.error(f"Error sending payment info to chat {chat_id}: {e}", exc_info=True)
+        await client.send_message(chat_id, "❌ An error occurred while sending payment details. Please try again.")
 
 
-async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+@app.on_message(filters.regex(r'^\d{10,20}$') & filters.private)
+async def handle_txn_id(client: Client, message: Message):
     """
     Handles messages containing only the TXN ID number to process payments.
     Checks against the `confirmed_upi_txns` collection.
     """
-    user = update.effective_user
+    user = message.from_user
     user_id = user.id
     username = user.username if user.username else user.first_name
-    txn_id = update.message.text.strip() # Directly use the text as TXN ID
+    txn_id = message.text.strip() # Directly use the text as TXN ID
 
     logger.info(f"User {user_id} ({username}) sent TXN ID: {txn_id}")
 
     # --- Check against confirmed_upi_txns collection ---
     if not confirmed_txn_collection:
-        await update.message.reply_text(
+        await message.reply_text(
             "❌ Payment verification system is currently unavailable. Please try again later or contact support."
         )
         logger.error("Confirmed TXN collection not initialized. Cannot verify payments.")
@@ -315,13 +327,13 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     confirmed_payment = confirmed_txn_collection.find_one({
         "txn_id": txn_id,
-        ""timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
+        "timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
         "status": "confirmed", # Assuming 'confirmed' status is set by the group message handler
         "used_by_user_id": {"$exists": False} # Ensure this TXN ID hasn't been used by another user
     })
 
     if not confirmed_payment:
-        await update.message.reply_text(
+        await message.reply_text(
             "❌ Invalid TXN ID, not found in our confirmed payments, or already used. Please double-check your TXN ID and try again."
         )
         logger.warning(f"TXN ID {txn_id} not found in confirmed_upi_txns or already used.")
@@ -331,7 +343,7 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     duration_days = config.SUBSCRIPTION_PLANS.get(amount)
 
     if not duration_days:
-        await update.message.reply_text(
+        await message.reply_text(
             "❌ Payment received, but the amount does not match any subscription plan. "
             "Please contact support if you believe this is an error."
         )
@@ -349,7 +361,7 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         logger.info(f"TXN ID {txn_id} marked as used by user {user_id}.")
 
-        await update.message.reply_text(
+        await message.reply_text(
             f"Dear {username}, 🎉\n\n"
             f"✅ Your payment has been confirmed.\n"
             f"🗓️ Premium access granted for {duration_days} days!\n"
@@ -358,18 +370,18 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         logger.info(f"Premium access granted for user {user_id} for {duration_days} days.")
     else:
-        await update.message.reply_text(
+        await message.reply_text(
             "An error occurred while updating your premium status. Please try again later or contact support."
         )
         logger.error(f"Failed to update premium status for user {user_id}.")
 
-# --- Handler: Listen to messages in the UPI TXN Group ---
-async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+@app.on_message(filters.chat(config.TXN_GROUP_ID) & filters.text & ~filters.command)
+async def process_group_message(client: Client, message: Message):
     """
     Listens for messages in the configured TXN_GROUP_ID, parses them for UPI TXN IDs and amounts,
     and stores them in the confirmed_upi_txns collection.
     """
-    message_text = update.message.text
+    message_text = message.text
     logger.info(f"Received message in TXN group {config.TXN_GROUP_ID}: {message_text}")
 
     # Regex to extract TXN ID and Amount from common UPI SMS formats
@@ -411,48 +423,34 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.debug(f"No TXN ID or Amount found in group message: {message_text}")
 
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log the error and send a message to the user."""
-    logger.error(f"Update {update} caused error {context.error}", exc_info=True)
-    if update.effective_message:
-        try:
-            await update.effective_message.reply_text(
-                "An unexpected error occurred. Please try again later."
-            )
-        except Exception as reply_e:
-            logger.error(f"Failed to send error reply to user: {reply_e}")
-
-
-def main() -> None:
-    """Start the bot."""
-    if not config.BOT_TOKEN:
-        logger.critical("BOT_TOKEN environment variable not set. Exiting.")
-        return
-
-    application = Application.builder().token(config.BOT_TOKEN).build()
-
-    # Register handlers for private chat with the user
-    application.add_handler(CommandHandler("start", start_command))
+async def main_bot_logic():
+    """Main function to start the Pyrogram client and schedule background tasks."""
+    logger.info("Starting bot and scheduling background tasks...")
     
-    # Handler for TXN ID input (now expects only the number)
-    # Filters for messages that are purely digits, 10 to 20 characters long, and from a private chat
-    application.add_handler(MessageHandler(filters.Regex(r'^\d{10,20}$') & ChatType.PRIVATE, handle_txn_id))
+    # Start the Pyrogram client
+    await app.start()
+    logger.info("Bot has connected to Telegram.")
 
-    # Register handlers for inline keyboard callbacks
-    application.add_handler(CallbackQueryHandler(pay_weekly_callback, pattern="^pay_weekly$"))
-    application.add_handler(CallbackQueryHandler(pay_monthly_callback, pattern="^pay_monthly$"))
+    logger.info("Background tasks initiated. Bot is now fully operational.")
 
-    # Register handler for messages coming from the specific TXN group
-    application.add_handler(MessageHandler(filters.Chat(config.TXN_GROUP_ID) & filters.TEXT & ~filters.COMMAND, chat_id_handler))
+    # Keep the bot alive
+    await asyncio.Event().wait()
 
-    application.add_error_handler(error_handler)
-
-    logger.info("Bot started polling...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    main()
-    if client:
-        client.close()
-        logger.info("MongoDB connection closed.")
+    logger.info("Script started. Entering main execution block.")
+    try:
+        # Pyrogram's app.run() is a blocking call that starts the bot and
+        # runs the provided coroutine (main_bot_logic) within its own event loop.
+        # It then handles long polling internally.
+        app.run(main_bot_logic())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by KeyboardInterrupt (Ctrl+C). Shutting down...")
+    except Exception as e:
+        logger.critical(f"An unhandled error occurred during bot startup or main execution: {e}", exc_info=True)
+    finally:
+        logger.info("Application exiting.")
+        if client:
+            client.close()
+            logger.info("MongoDB connection closed.")
 
