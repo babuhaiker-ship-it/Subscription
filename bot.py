@@ -18,8 +18,8 @@ class BotConfig:
 
     # Your Telegram API ID and API Hash (MANDATORY for Pyrogram)
     # Get these from my.telegram.org
-    API_ID = 12345678 # REPLACE WITH YOUR API_ID
-    API_HASH = 'your_api_hash_here' # REPLACE WITH YOUR API_HASH
+    API_ID = 29800015 # REPLACE WITH YOUR API_ID
+    API_HASH = 'c8f37108be31ab9ea2818bfe533fbb6f' # REPLACE WITH YOUR API_HASH
 
     # Your MongoDB URI (MUST be the SAME as your File-Sharing Bot's MONGO_URI)
     MONGO_URI = 'mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0' # REPLACE WITH YOUR ACTUAL MONGO_URI
