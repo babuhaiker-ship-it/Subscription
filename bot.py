@@ -12,6 +12,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
+from telegram.ext.filters import ChatType # Import ChatType explicitly
 import uuid
 import re
 import asyncio # Import asyncio for scheduling tasks
@@ -314,7 +315,7 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     confirmed_payment = confirmed_txn_collection.find_one({
         "txn_id": txn_id,
-        "timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
+        ""timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
         "status": "confirmed", # Assuming 'confirmed' status is set by the group message handler
         "used_by_user_id": {"$exists": False} # Ensure this TXN ID hasn't been used by another user
     })
@@ -434,8 +435,8 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start_command))
     
     # Handler for TXN ID input (now expects only the number)
-    # Filters for messages that are purely digits, 10 to 20 characters long
-    application.add_handler(MessageHandler(filters.Regex(r'^\d{10,20}$') & filters.PRIVATE, handle_txn_id))
+    # Filters for messages that are purely digits, 10 to 20 characters long, and from a private chat
+    application.add_handler(MessageHandler(filters.Regex(r'^\d{10,20}$') & ChatType.PRIVATE, handle_txn_id))
 
     # Register handlers for inline keyboard callbacks
     application.add_handler(CallbackQueryHandler(pay_weekly_callback, pattern="^pay_weekly$"))
