@@ -8,11 +8,13 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler, # Import CallbackQueryHandler
     filters,
     ContextTypes,
 )
 import uuid
-import re # Import regex module
+import re
+import asyncio # Import asyncio for scheduling tasks
 
 # --- Configuration ---
 class BotConfig:
@@ -34,13 +36,15 @@ class BotConfig:
 
     # ID of the Telegram Group where UPI SMS notifications are forwarded
     # The bot MUST be an admin in this group with 'Read All Messages' permission.
-    TXN_GROUP_ID = -1002685844988 # REPLACE WITH YOUR ACTUAL UPI SMS FORWARDING GROUP CHAT ID (e.g., -100xxxxxxxxxx)
+    TXN_GROUP_ID = -1002123456789 # REPLACE WITH YOUR ACTUAL UPI SMS FORWARDING GROUP CHAT ID (e.g., -100xxxxxxxxxx)
 
     # Define subscription plans and their corresponding durations in days
     SUBSCRIPTION_PLANS = {
-        49.0: 7,   # ₹49 for 7 days
-        149.0: 30  # ₹149 for 30 days
+        49.0: 7,   # ₹49 for 7 days (Weekly)
+        149.0: 30  # ₹149 for 30 days (Monthly)
     }
+
+    FREE_USER_SAVE_LIMIT = 100 # Max saved videos for free users (from your file-sharing bot)
 
 try:
     config = BotConfig()
@@ -78,12 +82,74 @@ except Exception as e:
     logger.critical(f"Error connecting to MongoDB: {e}", exc_info=True)
     client = None # Ensure client is None if connection fails
 
+# --- GLOBAL SET FOR TRACKING ASYNC TASKS ---
+active_tasks = set()
+
+def create_tracked_task(coro):
+    """
+    Creates an asyncio task, adds it to the global active_tasks set,
+    and removes it when it finishes (successfully or with an exception).
+    """
+    task = asyncio.create_task(coro)
+    active_tasks.add(task)
+    task.add_done_callback(active_tasks.discard)
+    logger.debug(f"Task {task.get_name()} created and tracked. Total active tasks: {len(active_tasks)}")
+    return task
+
 # --- Helper Functions ---
 
 def get_ist_now():
     """Returns the current time in IST timezone."""
     ist = pytz.timezone('Asia/Kolkata')
     return datetime.now(ist)
+
+def is_premium_user(user_id: int) -> bool:
+    """Checks if a user is a premium user (has an active admin-granted token)."""
+    now = datetime.utcnow()
+    doc = tokens_collection.find_one({'user_id': user_id})
+    if not doc or 'tokens' not in doc:
+        return False
+    
+    for token in doc['tokens']:
+        # Premium status is tied to tokens explicitly granted by an admin
+        if token.get('is_admin_granted', False) and token.get('expires_at') and token['expires_at'] > now:
+            return True
+    return False
+
+def get_user_stats(user_id: int) -> dict:
+    """Fetches user statistics from MongoDB."""
+    user_data = users_collection.find_one({'user_id': user_id})
+    tokens_doc = tokens_collection.find_one({'user_id': user_id})
+
+    tokens_count = 0
+    if tokens_doc and 'tokens' in tokens_doc:
+        now = datetime.utcnow()
+        tokens_count = sum(1 for token in tokens_doc['tokens'] if token.get('expires_at') and token['expires_at'] > now)
+
+    referral_count = user_data.get('referral_count', 0) if user_data else 0
+    bookmarked_videos = user_data.get('bookmarked_videos', []) if user_data else []
+    
+    is_premium = is_premium_user(user_id)
+    user_status = "Premium User 💎" if is_premium else "Free User ✨"
+    
+    if is_premium:
+        save_limit_display = f"{len(bookmarked_videos)}/Unlimited"
+    else:
+        save_limit_display = f"{len(bookmarked_videos)}/{config.FREE_USER_SAVE_LIMIT}"
+
+    # Assuming history_collection exists and stores views
+    history_collection = db.get_collection('history') # Get collection dynamically
+    views_doc = history_collection.find_one({'user_id': user_id})
+    view_count = len(views_doc['history']) if views_doc and 'history' in views_doc else 0
+
+    return {
+        "is_premium": is_premium,
+        "user_status": user_status,
+        "tokens_count": tokens_count,
+        "referral_count": referral_count,
+        "saved_videos_count": save_limit_display,
+        "view_count": view_count
+    }
 
 async def update_premium_status(user_id: int, username: str, duration_days: int):
     """
@@ -140,50 +206,102 @@ async def update_premium_status(user_id: int, username: str, duration_days: int)
     
     return expires_at_ist
 
+async def schedule_message_deletion(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay_seconds: int):
+    """Schedules a message to be deleted after a specified delay."""
+    try:
+        await asyncio.sleep(delay_seconds)
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        logger.info(f"Message {message_id} in chat {chat_id} auto-deleted after {delay_seconds} seconds.")
+    except Exception as e:
+        logger.warning(f"Failed to auto-delete message {message_id} in chat {chat_id}: {e}")
+
 # --- Telegram Bot Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a welcome message and payment instructions."""
+    """Sends a welcome message, user stats, and payment options."""
     user = update.effective_user
     username = user.username if user.username else user.first_name
+    user_id = user.id
+
+    # Fetch user stats
+    stats = get_user_stats(user_id)
 
     message = (
-        f"Dear {username}, to unlock premium access please pay:\n\n"
-        "📌 7 days: ₹49\n"
-        "📌 1 month: ₹149\n\n"
-        "Scan the QR or click the UPI link below 👇\n\n"
-        f"🔗 {config.UPI_LINK}\n\n"
-        "Once done, reply with: `TXN ID <your_transaction_id>`\n"
-        "Example: `TXN ID 264861XXXXX`"
+        f"👋 Welcome, {username}! ✨\n\n"
+        f"📊 <b>Your Current Stats:</b>\n"
+        f"<b>Status:</b> {stats['user_status']}\n"
+        f"<b>Tokens:</b> {stats['tokens_count']} 🪙\n"
+        f"<b>Video Views:</b> {stats['view_count']} 🎞️\n"
+        f"<b>Saved Videos:</b> {stats['saved_videos_count']} ❤️\n\n"
+        "To unlock premium access and enjoy unlimited features, choose a plan below:"
     )
 
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗓️ Weekly (₹49)", callback_data="pay_weekly")],
+        [InlineKeyboardButton("🗓️ Monthly (₹149)", callback_data="pay_monthly")]
+    ])
+
+    await update.message.reply_text(message, reply_markup=keyboard, parse_mode="HTML")
+    logger.info(f"User {user_id} received start message with stats and payment options.")
+
+async def send_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_type: str) -> None:
+    """Sends the QR code and UPI link for the selected plan."""
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+
+    message_text = (
+        f"To get your {plan_type} premium access, please pay:\n\n"
+        f"🔗 {config.UPI_LINK}\n\n"
+        "Once done, reply with just your **TXN ID number** (e.g., `516314312632`).\n\n"
+        "<i>This message will self-delete in 10 minutes for your privacy.</i> ⏳"
+    )
+
+    sent_message = None
     if config.QR_CODE_IMAGE_URL:
-        await update.message.reply_photo(photo=config.QR_CODE_IMAGE_URL, caption=message, parse_mode="Markdown")
+        sent_message = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=config.QR_CODE_IMAGE_URL,
+            caption=message_text,
+            parse_mode="HTML"
+        )
     else:
-        await update.message.reply_text(message, parse_mode="Markdown")
+        sent_message = await context.bot.send_message(
+            chat_id=chat_id,
+            text=message_text,
+            parse_mode="HTML"
+        )
+    
+    if sent_message:
+        # Schedule deletion of the payment info message
+        create_tracked_task(schedule_message_deletion(context, chat_id, sent_message.message_id, 600)) # 600 seconds = 10 minutes
+        logger.info(f"Payment info sent to user {user.id} for {plan_type} plan. Scheduled for deletion.")
+    else:
+        logger.error(f"Failed to send payment info message to user {user.id}.")
+        await context.bot.send_message(chat_id, "❌ Failed to send payment details. Please try again.")
+
+async def pay_weekly_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles 'Weekly' button click."""
+    await update.callback_query.answer() # Acknowledge the callback
+    await send_payment_info(update, context, "Weekly")
+    logger.info(f"User {update.effective_user.id} clicked Weekly plan.")
+
+async def pay_monthly_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles 'Monthly' button click."""
+    await update.callback_query.answer() # Acknowledge the callback
+    await send_payment_info(update, context, "Monthly")
+    logger.info(f"User {update.effective_user.id} clicked Monthly plan.")
+
 
 async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Handles messages containing 'TXN ID' to process payments.
-    Now checks against the `confirmed_upi_txns` collection.
+    Handles messages containing only the TXN ID number to process payments.
+    Checks against the `confirmed_upi_txns` collection.
     """
     user = update.effective_user
     user_id = user.id
     username = user.username if user.username else user.first_name
-    text = update.message.text.strip()
+    txn_id = update.message.text.strip() # Directly use the text as TXN ID
 
-    if not text.lower().startswith("txn id"):
-        return # Not a TXN ID message, ignore
-
-    parts = text.split(" ")
-    if len(parts) < 3:
-        await update.message.reply_text(
-            "Please provide the TXN ID in the format: `TXN ID <your_transaction_id>`",
-            parse_mode="Markdown"
-        )
-        return
-
-    txn_id = parts[2].strip()
     logger.info(f"User {user_id} ({username}) sent TXN ID: {txn_id}")
 
     # --- Check against confirmed_upi_txns collection ---
@@ -194,9 +312,6 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error("Confirmed TXN collection not initialized. Cannot verify payments.")
         return
 
-    # Look for the TXN ID in the confirmed_upi_txns collection
-    # Also, ensure it's a recent transaction (e.g., within the last 24 hours)
-    # and that it hasn't been used by another user already (optional, but good for security)
     confirmed_payment = confirmed_txn_collection.find_one({
         "txn_id": txn_id,
         "timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
@@ -247,8 +362,7 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         logger.error(f"Failed to update premium status for user {user_id}.")
 
-# --- New Handler: Listen to messages in the UPI TXN Group ---
-# This handler is registered directly in main() to ensure it's part of the application.
+# --- Handler: Listen to messages in the UPI TXN Group ---
 async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Listens for messages in the configured TXN_GROUP_ID, parses them for UPI TXN IDs and amounts,
@@ -318,7 +432,14 @@ def main() -> None:
 
     # Register handlers for private chat with the user
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_txn_id))
+    
+    # Handler for TXN ID input (now expects only the number)
+    # Filters for messages that are purely digits, 10 to 20 characters long
+    application.add_handler(MessageHandler(filters.Regex(r'^\d{10,20}$') & filters.PRIVATE, handle_txn_id))
+
+    # Register handlers for inline keyboard callbacks
+    application.add_handler(CallbackQueryHandler(pay_weekly_callback, pattern="^pay_weekly$"))
+    application.add_handler(CallbackQueryHandler(pay_monthly_callback, pattern="^pay_monthly$"))
 
     # Register handler for messages coming from the specific TXN group
     application.add_handler(MessageHandler(filters.Chat(config.TXN_GROUP_ID) & filters.TEXT & ~filters.COMMAND, chat_id_handler))
