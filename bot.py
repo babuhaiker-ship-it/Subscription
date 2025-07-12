@@ -19,7 +19,7 @@ import uuid # For generating token IDs
 # export BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
 # export MONGO_URI="mongodb+srv://user:password@cluster.mongodb.net/dbname?retryWrites=true&w=majority"
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+BOT_TOKEN = os.environ.get("7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk")
 # IMPORTANT: Use the exact MONGO_URI from your file-sharing bot's config.py
 # Example from your file-sharing bot: 'mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0'
 MONGO_URI = os.environ.get("MONGO_URI")
@@ -28,8 +28,8 @@ USERS_COLLECTION_NAME = "users" # This MUST match your file-sharing bot's users 
 TOKENS_COLLECTION_NAME = "tokens" # This MUST match your file-sharing bot's tokens collection name
 
 # UPI Link and QR Code (placeholders)
-UPI_LINK = "upi://pay?pa=yourupiid@bank&pn=YourName&am=1.00&cu=INR"
-QR_CODE_IMAGE_URL = "https://placehold.co/300x300/000/FFF?text=QR+Code+Here" # Placeholder
+UPI_LINK = "kanhaiyalal-49@ptaxis"
+QR_CODE_IMAGE_URL = "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder
 
 # Configure logging
 logging.basicConfig(
