@@ -11,27 +11,45 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-import uuid # For generating token IDs
+import uuid
+import re # Import regex module
 
 # --- Configuration ---
-# Set your bot token and MongoDB URI as environment variables for security.
-# Example:
-# export BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
-# export MONGO_URI="mongodb+srv://user:password@cluster.mongodb.net/dbname?retryWrites=true&w=majority"
+class BotConfig:
+    # Your Subscription Bot's Token (from BotFather for this bot)
+    BOT_TOKEN = '7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk' # REPLACE WITH YOUR SUBSCRIPTION BOT'S TOKEN
 
-BOT_TOKEN = os.environ.get("7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk")
-# IMPORTANT: Use the exact MONGO_URI from your file-sharing bot's config.py
-# Example from your file-sharing bot: 'mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0'
-MONGO_URI = os.environ.get("mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0")
-MONGO_DB_NAME = "spicybot"  # This MUST match your file-sharing bot's MONGO_DB_NAME
-USERS_COLLECTION_NAME = "users" # This MUST match your file-sharing bot's users collection name
-TOKENS_COLLECTION_NAME = "tokens" # This MUST match your file-sharing bot's tokens collection name
+    # Your MongoDB URI (MUST be the SAME as your File-Sharing Bot's MONGO_URI)
+    MONGO_URI = 'mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0' # REPLACE WITH YOUR ACTUAL MONGO_URI
 
-# UPI Link and QR Code (placeholders)
-UPI_LINK = "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=99&cu=INR"
-QR_CODE_IMAGE_URL = "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder
+    # MongoDB Database and Collection Names (MUST be the SAME as your File-Sharing Bot)
+    MONGO_DB_NAME = "spicybot"
+    USERS_COLLECTION_NAME = "users"
+    TOKENS_COLLECTION_NAME = "tokens"
+    CONFIRMED_TXN_COLLECTION_NAME = "confirmed_upi_txns" # New collection to store confirmed UPI transactions
 
-# Configure logging
+    # UPI Link and QR Code Image URL
+    UPI_LINK = "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=99&cu=INR" # REPLACE with your actual UPI link
+    QR_CODE_IMAGE_URL = "https://i.postimg.cc/28W3hCmz/Image.jpg" # REPLACE with your actual QR code image URL
+
+    # ID of the Telegram Group where UPI SMS notifications are forwarded
+    # The bot MUST be an admin in this group with 'Read All Messages' permission.
+    TXN_GROUP_ID = -1002685844988 # REPLACE WITH YOUR ACTUAL UPI SMS FORWARDING GROUP CHAT ID (e.g., -100xxxxxxxxxx)
+
+    # Define subscription plans and their corresponding durations in days
+    SUBSCRIPTION_PLANS = {
+        49.0: 7,   # ₹49 for 7 days
+        149.0: 30  # ₹149 for 30 days
+    }
+
+try:
+    config = BotConfig()
+    if not all([config.BOT_TOKEN, config.MONGO_URI, config.TXN_GROUP_ID]):
+        raise ValueError("One or more essential configuration variables are not set. Please check BOT_TOKEN, MONGO_URI, TXN_GROUP_ID.")
+except Exception as e:
+    raise RuntimeError(f"Failed to load bot configuration: {e}")
+
+# --- Logging Setup ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
@@ -42,30 +60,23 @@ client = None
 db = None
 users_collection = None
 tokens_collection = None
+confirmed_txn_collection = None # New collection instance
 
 try:
-    if MONGO_URI:
-        client = MongoClient(MONGO_URI)
-        db = client[MONGO_DB_NAME]
-        users_collection = db[USERS_COLLECTION_NAME]
-        tokens_collection = db[TOKENS_COLLECTION_NAME]
-        logger.info(f"MongoDB connected successfully to DB: {MONGO_DB_NAME}, using collections: {USERS_COLLECTION_NAME}, {TOKENS_COLLECTION_NAME}")
-    else:
-        logger.error("MONGO_URI environment variable not set. MongoDB will not be used.")
+    client = MongoClient(config.MONGO_URI)
+    db = client[config.MONGO_DB_NAME]
+    users_collection = db[config.USERS_COLLECTION_NAME]
+    tokens_collection = db[config.TOKENS_COLLECTION_NAME]
+    confirmed_txn_collection = db[config.CONFIRMED_TXN_COLLECTION_NAME]
+    
+    # Create index on txn_id for faster lookups
+    confirmed_txn_collection.create_index([("txn_id", 1)], unique=True)
+    
+    logger.info(f"MongoDB connected successfully to DB: {config.MONGO_DB_NAME}")
+    logger.info(f"Using collections: {config.USERS_COLLECTION_NAME}, {config.TOKENS_COLLECTION_NAME}, {config.CONFIRMED_TXN_COLLECTION_NAME}")
 except Exception as e:
     logger.critical(f"Error connecting to MongoDB: {e}", exc_info=True)
     client = None # Ensure client is None if connection fails
-
-# --- Mock Payment Data (For Simulation) ---
-# In a real scenario, this data would come from your UPI SMS forwarding system
-# (e.g., parsed from SMS messages forwarded to a private Telegram group or a database).
-MOCK_PAYMENTS = {
-    "26486100001": {"amount": 49.0, "status": "paid"}, # 7 days
-    "26486100002": {"amount": 149.0, "status": "paid"}, # 30 days
-    "26486100003": {"amount": 49.0, "status": "paid"},
-    "26486100004": {"amount": 149.0, "status": "paid"},
-    # Add more mock TXN IDs as needed for testing
-}
 
 # --- Helper Functions ---
 
@@ -87,7 +98,6 @@ async def update_premium_status(user_id: int, username: str, duration_days: int)
     expires_at_utc = now_utc + timedelta(days=duration_days)
 
     # 1. Add/Update user document in 'users' collection
-    # This ensures the user exists and their username/first_name is up-to-date
     user_doc_update = {
         'username': username,
         'first_name': username, # Assuming username is first_name if no actual username
@@ -95,7 +105,6 @@ async def update_premium_status(user_id: int, username: str, duration_days: int)
         'last_updated_by_sub_bot': get_ist_now().isoformat() # Track updates from this bot
     }
     
-    # If user doesn't exist, set joined_date. If exists, just update.
     existing_user = users_collection.find_one({'user_id': user_id})
     if not existing_user:
         user_doc_update['joined_date'] = now_utc
@@ -112,7 +121,6 @@ async def update_premium_status(user_id: int, username: str, duration_days: int)
     logger.info(f"User document updated/created for {user_id} in 'users' collection.")
 
     # 2. Add an admin-granted token to the 'tokens' collection
-    # This replicates the logic of your file-sharing bot's add_token for premium
     new_token = {
         'token_id': str(uuid.uuid4()),
         'created_at': now_utc,
@@ -120,7 +128,6 @@ async def update_premium_status(user_id: int, username: str, duration_days: int)
         'is_admin_granted': True # This is the crucial flag for premium access
     }
 
-    # Use $push to add the new token to the 'tokens' array, upserting if the document doesn't exist
     tokens_collection.update_one(
         {'user_id': user_id},
         {'$push': {'tokens': new_token}},
@@ -128,7 +135,6 @@ async def update_premium_status(user_id: int, username: str, duration_days: int)
     )
     logger.info(f"Premium token added for user {user_id} in 'tokens' collection, expires at {expires_at_utc} UTC.")
 
-    # Convert UTC expiry to IST for display
     ist = pytz.timezone('Asia/Kolkata')
     expires_at_ist = expires_at_utc.astimezone(ist)
     
@@ -146,19 +152,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "📌 7 days: ₹49\n"
         "📌 1 month: ₹149\n\n"
         "Scan the QR or click the UPI link below 👇\n\n"
-        f"🔗 {UPI_LINK}\n\n"
+        f"🔗 {config.UPI_LINK}\n\n"
         "Once done, reply with: `TXN ID <your_transaction_id>`\n"
         "Example: `TXN ID 264861XXXXX`"
     )
 
-    # Send QR code image (optional)
-    if QR_CODE_IMAGE_URL:
-        await update.message.reply_photo(photo=QR_CODE_IMAGE_URL, caption=message, parse_mode="Markdown")
+    if config.QR_CODE_IMAGE_URL:
+        await update.message.reply_photo(photo=config.QR_CODE_IMAGE_URL, caption=message, parse_mode="Markdown")
     else:
         await update.message.reply_text(message, parse_mode="Markdown")
 
 async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles messages containing 'TXN ID' to process payments."""
+    """
+    Handles messages containing 'TXN ID' to process payments.
+    Now checks against the `confirmed_upi_txns` collection.
+    """
     user = update.effective_user
     user_id = user.id
     username = user.username if user.username else user.first_name
@@ -178,37 +186,53 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     txn_id = parts[2].strip()
     logger.info(f"User {user_id} ({username}) sent TXN ID: {txn_id}")
 
-    # --- Simulate Payment Confirmation ---
-    # In a real system, you would query your SMS forwarding database or API here.
-    # For this example, we check against MOCK_PAYMENTS.
-    payment_info = MOCK_PAYMENTS.get(txn_id)
-
-    if not payment_info or payment_info["status"] != "paid":
+    # --- Check against confirmed_upi_txns collection ---
+    if not confirmed_txn_collection:
         await update.message.reply_text(
-            "❌ Invalid amount or TXN ID not found. Please double-check your TXN ID and try again."
+            "❌ Payment verification system is currently unavailable. Please try again later or contact support."
         )
-        logger.warning(f"TXN ID {txn_id} not found or not paid in mock data.")
+        logger.error("Confirmed TXN collection not initialized. Cannot verify payments.")
         return
 
-    amount = payment_info["amount"]
-    duration_days = 0
+    # Look for the TXN ID in the confirmed_upi_txns collection
+    # Also, ensure it's a recent transaction (e.g., within the last 24 hours)
+    # and that it hasn't been used by another user already (optional, but good for security)
+    confirmed_payment = confirmed_txn_collection.find_one({
+        "txn_id": txn_id,
+        "timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
+        "status": "confirmed", # Assuming 'confirmed' status is set by the group message handler
+        "used_by_user_id": {"$exists": False} # Ensure this TXN ID hasn't been used by another user
+    })
 
-    if amount == 49.0:
-        duration_days = 7
-    elif amount == 149.0:
-        duration_days = 30
-    else:
+    if not confirmed_payment:
+        await update.message.reply_text(
+            "❌ Invalid TXN ID, not found in our confirmed payments, or already used. Please double-check your TXN ID and try again."
+        )
+        logger.warning(f"TXN ID {txn_id} not found in confirmed_upi_txns or already used.")
+        return
+
+    amount = confirmed_payment["amount"]
+    duration_days = config.SUBSCRIPTION_PLANS.get(amount)
+
+    if not duration_days:
         await update.message.reply_text(
             "❌ Payment received, but the amount does not match any subscription plan. "
             "Please contact support if you believe this is an error."
         )
-        logger.warning(f"TXN ID {txn_id} found, but amount {amount} is invalid.")
+        logger.warning(f"TXN ID {txn_id} found, but amount {amount} does not match any plan.")
         return
 
-    # --- Update MongoDB ---
+    # --- Update MongoDB and mark transaction as used ---
     expires_at_ist = await update_premium_status(user_id, username, duration_days)
 
     if expires_at_ist:
+        # Mark the transaction as used in the database
+        confirmed_txn_collection.update_one(
+            {"_id": confirmed_payment["_id"]},
+            {"$set": {"used_by_user_id": user_id, "used_at": datetime.utcnow()}}
+        )
+        logger.info(f"TXN ID {txn_id} marked as used by user {user_id}.")
+
         await update.message.reply_text(
             f"Dear {username}, 🎉\n\n"
             f"✅ Your payment has been confirmed.\n"
@@ -223,25 +247,82 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         logger.error(f"Failed to update premium status for user {user_id}.")
 
+# --- New Handler: Listen to messages in the UPI TXN Group ---
+# This handler is registered directly in main() to ensure it's part of the application.
+async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Listens for messages in the configured TXN_GROUP_ID, parses them for UPI TXN IDs and amounts,
+    and stores them in the confirmed_upi_txns collection.
+    """
+    message_text = update.message.text
+    logger.info(f"Received message in TXN group {config.TXN_GROUP_ID}: {message_text}")
+
+    # Regex to extract TXN ID and Amount from common UPI SMS formats
+    # This regex is a starting point and might need adjustment based on your exact SMS format.
+    # It looks for patterns like "TxnId: <ID>", "Txn ID: <ID>", "UPI Ref No: <ID>"
+    # and amounts like "Rs. <AMOUNT>", "INR <AMOUNT>", "Rs<AMOUNT>"
+    txn_id_match = re.search(r'(?:TxnId|Txn ID|UPI Ref No|Ref No|UTR|Transaction ID)[:\s]*([a-zA-Z0-9]{10,20})', message_text, re.IGNORECASE)
+    amount_match = re.search(r'(?:Rs\.?|INR)\s*([\d,]+\.?\d{0,2})', message_text, re.IGNORECASE)
+
+    if txn_id_match and amount_match:
+        txn_id = txn_id_match.group(1).strip()
+        amount_str = amount_match.group(1).replace(',', '').strip()
+        try:
+            amount = float(amount_str)
+        except ValueError:
+            logger.warning(f"Could not parse amount '{amount_str}' from TXN group message: {message_text}")
+            return # Skip if amount is not a valid number
+
+        logger.info(f"Parsed TXN ID: {txn_id}, Amount: {amount} from group message.")
+
+        # Check if the TXN ID already exists to prevent duplicates
+        if confirmed_txn_collection.find_one({"txn_id": txn_id}):
+            logger.info(f"TXN ID {txn_id} already exists in confirmed_upi_txns. Skipping insertion.")
+            return
+
+        # Store the confirmed transaction in MongoDB
+        try:
+            confirmed_txn_collection.insert_one({
+                "txn_id": txn_id,
+                "amount": amount,
+                "timestamp": datetime.utcnow(),
+                "message_text": message_text, # Store original message for debugging
+                "status": "confirmed" # Mark as confirmed
+            })
+            logger.info(f"Stored new confirmed TXN ID: {txn_id} with amount {amount}.")
+        except Exception as e:
+            logger.error(f"Error inserting confirmed TXN ID {txn_id} into DB: {e}", exc_info=True)
+    else:
+        logger.debug(f"No TXN ID or Amount found in group message: {message_text}")
+
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error and send a message to the user."""
-    logger.error(f"Update {update} caused error {context.error}")
+    logger.error(f"Update {update} caused error {context.error}", exc_info=True)
     if update.effective_message:
-        await update.effective_message.reply_text(
-            "An unexpected error occurred. Please try again later."
-        )
+        try:
+            await update.effective_message.reply_text(
+                "An unexpected error occurred. Please try again later."
+            )
+        except Exception as reply_e:
+            logger.error(f"Failed to send error reply to user: {reply_e}")
+
 
 def main() -> None:
     """Start the bot."""
-    if not BOT_TOKEN:
+    if not config.BOT_TOKEN:
         logger.critical("BOT_TOKEN environment variable not set. Exiting.")
         return
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token(config.BOT_TOKEN).build()
 
-    # Register handlers
+    # Register handlers for private chat with the user
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_txn_id))
+
+    # Register handler for messages coming from the specific TXN group
+    application.add_handler(MessageHandler(filters.Chat(config.TXN_GROUP_ID) & filters.TEXT & ~filters.COMMAND, chat_id_handler))
+
     application.add_error_handler(error_handler)
 
     logger.info("Bot started polling...")
@@ -249,7 +330,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    # Close MongoDB connection when the application stops
     if client:
         client.close()
         logger.info("MongoDB connection closed.")
