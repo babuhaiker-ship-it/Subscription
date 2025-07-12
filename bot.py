@@ -22,13 +22,13 @@ import uuid # For generating token IDs
 BOT_TOKEN = os.environ.get("7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk")
 # IMPORTANT: Use the exact MONGO_URI from your file-sharing bot's config.py
 # Example from your file-sharing bot: 'mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0'
-MONGO_URI = os.environ.get("MONGO_URI")
+MONGO_URI = os.environ.get("mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0")
 MONGO_DB_NAME = "spicybot"  # This MUST match your file-sharing bot's MONGO_DB_NAME
 USERS_COLLECTION_NAME = "users" # This MUST match your file-sharing bot's users collection name
 TOKENS_COLLECTION_NAME = "tokens" # This MUST match your file-sharing bot's tokens collection name
 
 # UPI Link and QR Code (placeholders)
-UPI_LINK = "kanhaiyalal-49@ptaxis"
+UPI_LINK = "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=99&cu=INR"
 QR_CODE_IMAGE_URL = "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder
 
 # Configure logging
