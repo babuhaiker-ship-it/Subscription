@@ -18,8 +18,8 @@ class BotConfig:
 
     # Your Telegram API ID and API Hash (MANDATORY for Pyrogram)
     # Get these from my.telegram.org
-    API_ID = 29800015 # REPLACE WITH YOUR API_ID
-    API_HASH = 'c8f37108be31ab9ea2818bfe533fbb6f' # REPLACE WITH YOUR API_HASH
+    API_ID = 12345678 # REPLACE WITH YOUR API_ID
+    API_HASH = 'your_api_hash_here' # REPLACE WITH YOUR API_HASH
 
     # Your MongoDB URI (MUST be the SAME as your File-Sharing Bot's MONGO_URI)
     MONGO_URI = 'mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0' # REPLACE WITH YOUR ACTUAL MONGO_URI
@@ -51,7 +51,8 @@ try:
     if not all([config.BOT_TOKEN, config.API_ID, config.API_HASH, config.MONGO_URI, config.TXN_GROUP_ID]):
         raise ValueError("One or more essential configuration variables (BOT_TOKEN, API_ID, API_HASH, MONGO_URI, TXN_GROUP_ID) are not set.")
 except Exception as e:
-    raise RuntimeError(f"Failed to load bot configuration: {e}")
+    logger.critical(f"Failed to load bot configuration: {e}", exc_info=True)
+    raise RuntimeError("Bot configuration error. Check logs for details.") # Re-raise to stop execution
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -91,6 +92,7 @@ try:
 except Exception as e:
     logger.critical(f"Error connecting to MongoDB: {e}", exc_info=True)
     client = None # Ensure client is None if connection fails
+    raise RuntimeError("MongoDB connection error. Check logs for details.") # Re-raise to stop execution
 
 # --- GLOBAL SET FOR TRACKING ASYNC TASKS ---
 active_tasks = set()
@@ -375,7 +377,7 @@ async def handle_txn_id(client: Client, message: Message):
         )
         logger.error(f"Failed to update premium status for user {user_id}.")
 
-@app.on_message(filters.chat(config.TXN_GROUP_ID) & filters.text & ~filters.command)
+@app.on_message(filters.chat(config.TXN_GROUP_ID) & filters.text & ~filters.command()) # Corrected: filters.command()
 async def process_group_message(client: Client, message: Message):
     """
     Listens for messages in the configured TXN_GROUP_ID, parses them for UPI TXN IDs and amounts,
