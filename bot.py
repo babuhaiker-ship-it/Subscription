@@ -10,38 +10,54 @@ from bson.objectid import ObjectId
 
 # --- Logging Setup ---
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO, # Changed to INFO for production, use DEBUG for detailed logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 # --- Bot Configuration Class ---
 class BotConfig:
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk")
-    API_ID = int(os.environ.get("API_ID", 29800015))
-    API_HASH = os.environ.get("API_HASH", "c8f37108be31ab9ea2818bfe533fbb6f")
-    MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0")
+    # Get environment variables or use default placeholders
+    BOT_TOKEN = os.environ.get("BOT_TOKEN", "7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk") # Replace with your actual bot token
+    API_ID = int(os.environ.get("API_ID", 29800015)) # Replace with your actual API ID
+    API_HASH = os.environ.get("API_HASH", "c8f37108be31ab9ea2818bfe533fbb6f") # Replace with your actual API Hash
+    MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0") # Replace with your MongoDB URI
     MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "spicybot")
-    UPI_LINK = os.environ.get("UPI_LINK", "upi://pay?pa=you@upi&pn=YourName&mc=0000&tid=00000000000000&tr=YourRef&am=1.00")
-    QR_CODE_IMAGE_URL = os.environ.get("QR_CODE_IMAGE_URL", "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR")
-    TXN_GROUP_ID = int(os.environ.get("TXN_GROUP_ID", -1002685844988))
-    SUBSCRIPTION_PLANS = {
-        "weekly": {"amount": 49, "duration_days": 7},
-        "monthly": {"amount": 149, "duration_days": 30},
-    }
-    PAYMENT_MESSAGE_DELETE_DELAY = 600
-    ADMIN_IDS = [123456789]
+    
+    # UPI details for different plans - IMPORTANT: Replace with actual details
+    # For a real bot, you'd integrate with a payment gateway or use dynamic UPI links
+    # that reflect the amount. For this example, we'll simulate different links.
+    UPI_BASE_LINK = "upi://pay?pa=your_vpa@bank&pn=NyraaExclusive&mc=0000&tid=NYRAA{txn_id_placeholder}&tr={ref_id_placeholder}&am={amount}.00"
+    
+    # Placeholder for a generic QR code image. In a real scenario, you'd generate this dynamically
+    # or use a service that provides QR codes for specific UPI links.
+    # For demonstration, we'll use a placeholder.
+    QR_CODE_IMAGE_URL = "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR+Code" 
+    
+    # Telegram Group ID where payment confirmation messages are forwarded
+    # IMPORTANT: Replace with your actual TXN_GROUP_ID (must be an integer, e.g., -1001234567890)
+    TXN_GROUP_ID = int(os.environ.get("TXN_GROUP_ID", -1002685844988)) 
 
-# --- MongoDB Connection ---
+    SUBSCRIPTION_PLANS = {
+        "weekly": {"amount": 69, "duration_days": 7},
+        "monthly": {"amount": 199, "duration_days": 30},
+    }
+    PAYMENT_MESSAGE_DELETE_DELAY = 600 # 10 minutes
+
+    # Admin IDs for debugging or future admin commands
+    ADMIN_IDS = [6612030110] # Replace with your actual Telegram User ID (integer)
+
+# --- MongoDB Connection Setup ---
 mongo_client = AsyncIOMotorClient(BotConfig.MONGO_URI)
 db = mongo_client[BotConfig.MONGO_DB_NAME]
 
+# Collections
 users_collection = db.users
 tokens_collection = db.tokens
 history_collection = db.history
 confirmed_upi_txns_collection = db.confirmed_upi_txns
 
-# --- Pyrogram Client ---
+# --- Pyrogram Client Initialization ---
 app = Client(
     "SubscriptionBot",
     api_id=BotConfig.API_ID,
@@ -50,7 +66,9 @@ app = Client(
 )
 
 # --- Helper Functions ---
+
 async def get_user_stats(user_id: int):
+    """Fetches and compiles user statistics."""
     user_data = await users_collection.find_one({"user_id": user_id})
     user_tokens = await tokens_collection.find_one({"user_id": user_id})
     user_history = await history_collection.find_one({"user_id": user_id})
@@ -58,7 +76,6 @@ async def get_user_stats(user_id: int):
     is_premium = False
     active_tokens_count = 0
     expires_at = "N/A"
-
     if user_tokens and user_tokens.get("tokens"):
         now = datetime.utcnow()
         active_tokens = [
@@ -68,6 +85,7 @@ async def get_user_stats(user_id: int):
         active_tokens_count = len(active_tokens)
         if active_tokens_count > 0:
             is_premium = True
+            # Find the latest expiry date among active tokens
             latest_expiry = max(token["expires_at"] for token in active_tokens)
             expires_at = latest_expiry.strftime("%Y-%m-%d %H:%M UTC")
 
@@ -85,10 +103,11 @@ async def get_user_stats(user_id: int):
     }
 
 async def update_premium_status(user_id: int, duration_days: int):
+    """Grants premium access to a user for a specified duration."""
     expires_at = datetime.utcnow() + timedelta(days=duration_days)
     token_data = {
-        "token_id": str(ObjectId()),
-        "is_admin_granted": True,
+        "token_id": str(ObjectId()), # Generate a unique ID for the token
+        "is_admin_granted": True, # Mark as granted by bot/admin
         "granted_at": datetime.utcnow(),
         "expires_at": expires_at,
         "granted_by": "SubscriptionBot",
@@ -96,194 +115,336 @@ async def update_premium_status(user_id: int, duration_days: int):
 
     await tokens_collection.update_one(
         {"user_id": user_id},
-        {"$push": {"tokens": token_data}},
-        upsert=True
+        {"$push": {"tokens": token_data}}, # Add the new token to the user's tokens array
+        upsert=True # Create the document if it doesn't exist
     )
 
     await users_collection.update_one(
         {"user_id": user_id},
-        {"$set": {"last_premium_check_status": True}},
+        {"$set": {"last_premium_check_status": True}}, # Update premium status flag
         upsert=True
     )
     return expires_at
 
 async def schedule_message_deletion(chat_id: int, message_id: int, delay: int):
+    """Schedules a message for deletion after a specified delay."""
     await asyncio.sleep(delay)
     try:
         await app.delete_messages(chat_id, message_id)
+        logger.info(f"Deleted message {message_id} in chat {chat_id} after {delay} seconds.")
     except Exception as e:
-        logger.error(f"Failed to delete message {message_id}: {e}")
+        logger.error(f"Could not delete message {message_id} in chat {chat_id}: {e}")
 
-# --- Command Handlers ---
-@app.on_message(filters.command("ping") & filters.private)
-async def ping_command(client: Client, message: types.Message):
-    await message.reply_text("Pong!")
+async def generate_upi_link(amount: int, user_id: int) -> str:
+    """Generates a unique UPI payment link for the given amount and user."""
+    # In a real scenario, you'd generate a unique transaction ID and reference ID
+    # that you can later match with incoming payments.
+    # For this example, we'll use a simple timestamp and user ID.
+    timestamp_str = datetime.now().strftime("%Y%m%d%H%M%S")
+    txn_id_placeholder = f"{timestamp_str}{user_id}"
+    ref_id_placeholder = f"NYRAA{user_id}{timestamp_str}"
+    
+    # Replace placeholders in the base UPI link
+    upi_link = BotConfig.UPI_BASE_LINK.format(
+        txn_id_placeholder=txn_id_placeholder,
+        ref_id_placeholder=ref_id_placeholder,
+        amount=amount
+    )
+    return upi_link
+
+# --- Handlers for User Interaction (Private Chat) ---
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: types.Message):
+    """Handles the /start command, sending a welcome message and subscription options."""
     user_id = message.from_user.id
-    logger.info(f"Start command from {user_id}")
+    user_name = message.from_user.first_name
+    logger.info(f"Received /start command from user {user_id} ({user_name})")
 
-    # Ensure user exists
-    if not await users_collection.find_one({"user_id": user_id}):
-        await users_collection.insert_one({
-            "user_id": user_id,
-            "first_name": message.from_user.first_name,
-            "referral_count": 0,
-            "bookmarked_videos": [],
-            "created_at": datetime.utcnow()
-        })
-
-    user_stats = await get_user_stats(user_id)
-
-    status_text = "Free User"
-    if user_stats["is_premium"]:
-        status_text = f"Premium User (Expires: {user_stats['expires_at']})"
-
-    response_text = (
-        f"👋 Hello {message.from_user.first_name}!\n\n"
-        f"📊 **Your Stats:**\n"
-        f"  - Status: {status_text}\n"
-        f"  - Active Premium Tokens: {user_stats['active_tokens_count']}\n"
-        f"  - Referrals: {user_stats['referral_count']}\n"
-        f"  - Saved Videos: {user_stats['saved_video_count']}\n"
-        f"  - Total Video Views: {user_stats['video_views']}\n\n"
-        "✨ **Unlock Premium Access!**\n"
-        "Choose a plan below to get started. After payment, reply with your Transaction ID."
+    welcome_message = (
+        f"Dear {user_name}, this is Nyraa Exclusive. Here you can buy tokens. "
+        "Please select a plan to continue."
     )
 
     keyboard = types.InlineKeyboardMarkup([
         [
-            types.InlineKeyboardButton("🗓️ Weekly (₹49)", callback_data="pay_weekly"),
-            types.InlineKeyboardButton("🗓️ Monthly (₹149)", callback_data="pay_monthly")
+            types.InlineKeyboardButton(
+                "🗓️ ₹69 Weekly Trial", callback_data="pay_weekly"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                "🗓️ ₹199 Monthly", callback_data="pay_monthly"
+            )
         ]
     ])
-
-    await message.reply_text(response_text, reply_markup=keyboard, parse_mode="markdown")
+    await message.reply_text(welcome_message, reply_markup=keyboard, parse_mode="markdown")
 
 async def send_payment_info(client: Client, message: types.Message, plan_type: str):
-    plan = BotConfig.SUBSCRIPTION_PLANS.get(plan_type)
-    if not plan:
-        await message.reply_text("Invalid plan selected.")
+    """Sends payment instructions, UPI link, and QR code (if available) to the user."""
+    user_id = message.from_user.id
+    plan_details = BotConfig.SUBSCRIPTION_PLANS.get(plan_type)
+    if not plan_details:
+        await message.reply_text("Invalid subscription plan selected. Please try again.")
         return
 
-    caption = (
-        f"💸 **Payment Instructions for {plan_type.capitalize()} Plan (₹{plan['amount']}):**\n\n"
-        f"1. Click the UPI link or scan the QR code.\n"
-        f"2. Pay exactly ₹{plan['amount']}.\n"
-        f"3. Reply to this message with your **Transaction ID**.\n\n"
-        f"📎 UPI Link: `{BotConfig.UPI_LINK}`\n\n"
-        "⚠️ This message will auto-delete in 10 minutes."
+    amount = plan_details["amount"]
+    upi_link = await generate_upi_link(amount, user_id) # Generate dynamic UPI link
+
+    payment_instructions = (
+        f"💰 **Payment Instructions for {plan_type.capitalize()} Plan (₹{amount}):**\n\n"
+        f"1. Click the UPI link below or scan the QR code.\n"
+        f"2. Pay exactly **₹{amount}**.\n"
+        f"3. **IMPORTANT:** After successful payment, reply to *this message* with only your **Transaction ID** (10-20 digits long).\n\n"
+        f"🔗 **UPI Link:** `{upi_link}`\n\n"
+        "This message will self-destruct in 10 minutes for your privacy."
     )
 
-    sent = await client.send_photo(
-        chat_id=message.chat.id,
-        photo=BotConfig.QR_CODE_IMAGE_URL,
-        caption=caption,
-        parse_mode="markdown"
-    )
+    sent_message = None
+    # Attempt to send QR code image if URL is configured
+    if BotConfig.QR_CODE_IMAGE_URL and BotConfig.QR_CODE_IMAGE_URL.startswith("http"):
+        try:
+            sent_message = await client.send_photo(
+                chat_id=message.chat.id,
+                photo=BotConfig.QR_CODE_IMAGE_URL,
+                caption=payment_instructions,
+                parse_mode="markdown"
+            )
+        except Exception as e:
+            logger.error(f"Error sending QR code image: {e}. Sending text only.")
+            sent_message = await message.reply_text(payment_instructions, parse_mode="markdown")
+    else:
+        sent_message = await message.reply_text(payment_instructions, parse_mode="markdown")
 
-    asyncio.create_task(schedule_message_deletion(
-        message.chat.id, sent.id, BotConfig.PAYMENT_MESSAGE_DELETE_DELAY
-    ))
+    if sent_message:
+        # Schedule the payment message for deletion for privacy
+        asyncio.create_task(
+            schedule_message_deletion(
+                message.chat.id, sent_message.id, BotConfig.PAYMENT_MESSAGE_DELETE_DELAY
+            )
+        )
 
 @app.on_callback_query(filters.regex("pay_weekly"))
-async def pay_weekly(client: Client, callback_query: types.CallbackQuery):
-    await callback_query.answer("Weekly plan selected.")
+async def pay_weekly_callback(client: Client, callback_query: types.CallbackQuery):
+    """Handles callback for weekly plan selection."""
+    logger.info(f"Received pay_weekly callback from user {callback_query.from_user.id}")
+    await callback_query.answer("You selected Weekly Trial Plan. Sending payment details...")
     await send_payment_info(client, callback_query.message, "weekly")
 
 @app.on_callback_query(filters.regex("pay_monthly"))
-async def pay_monthly(client: Client, callback_query: types.CallbackQuery):
-    await callback_query.answer("Monthly plan selected.")
+async def pay_monthly_callback(client: Client, callback_query: types.CallbackQuery):
+    """Handles callback for monthly plan selection."""
+    logger.info(f"Received pay_monthly callback from user {callback_query.from_user.id}")
+    await callback_query.answer("You selected Monthly Plan. Sending payment details...")
     await send_payment_info(client, callback_query.message, "monthly")
 
 @app.on_message(filters.private & filters.regex(r'^\d{10,20}$'))
 async def handle_txn_id(client: Client, message: types.Message):
+    """Handles messages containing a potential transaction ID from users."""
     user_id = message.from_user.id
+    user_name = message.from_user.first_name
     txn_id = message.text.strip()
+    logger.info(f"User {user_id} ({user_name}) sent potential TXN ID: {txn_id}")
+
+    await message.reply_chat_action("typing")
 
     now = datetime.utcnow()
-    one_day_ago = now - timedelta(days=1)
+    # Look for transactions confirmed within the last 24 hours that haven't been used
+    one_day_ago = now - timedelta(days=1) 
 
-    txn = await confirmed_upi_txns_collection.find_one({
+    confirmed_txn = await confirmed_upi_txns_collection.find_one({
         "txn_id": txn_id,
-        "timestamp": {"$gte": one_day_ago},
-        "$or": [{"used_by_user_id": None}, {"used_by_user_id": {"$exists": False}}]
+        "timestamp": {"$gte": one_day_ago}, # Transaction must be recent
+        "$or": [
+            {"used_by_user_id": {"$exists": False}}, # Not used by any user
+            {"used_by_user_id": None} # Explicitly not used
+        ]
     })
 
-    if not txn:
-        await message.reply_text("❌ Transaction not found or already used.")
+    if not confirmed_txn:
+        await message.reply_text(
+            "❌ **Payment not found or already used!**\n\n"
+            "Please ensure:\n"
+            "1. You have completed the payment.\n"
+            "2. You are entering the correct Transaction ID.\n"
+            "3. The payment was made recently (within the last 24 hours).\n"
+            "If you believe this is an error, please contact support."
+        )
+        logger.warning(f"TXN ID {txn_id} from user {user_id} not found or already used.")
         return
 
-    matched_plan = next(
-        (k for k, v in BotConfig.SUBSCRIPTION_PLANS.items() if v["amount"] == txn["amount"]),
-        None
-    )
+    # Determine which plan the payment corresponds to
+    matched_plan = None
+    for plan_type, details in BotConfig.SUBSCRIPTION_PLANS.items():
+        if confirmed_txn.get("amount") == details["amount"]:
+            matched_plan = plan_type
+            break
 
     if not matched_plan:
-        await message.reply_text("❌ Amount mismatch with available plans.")
+        # If the amount doesn't match any known plan
+        await message.reply_text(
+            f"❌ **Payment amount mismatch!**\n\n"
+            f"The amount detected for TXN ID `{txn_id}` is ₹{confirmed_txn.get('amount', 'N/A')}. "
+            f"Please ensure you pay either ₹{BotConfig.SUBSCRIPTION_PLANS['weekly']['amount']} (Weekly) "
+            f"or ₹{BotConfig.SUBSCRIPTION_PLANS['monthly']['amount']} (Monthly)."
+        )
+        # Mark the transaction as having an amount mismatch
+        await confirmed_upi_txns_collection.update_one(
+            {"_id": confirmed_txn["_id"]},
+            {"$set": {"status": "amount_mismatch", "checked_at": now}}
+        )
+        logger.warning(f"TXN ID {txn_id} from user {user_id}: Amount mismatch. Detected: {confirmed_txn.get('amount')}")
         return
 
-    expires_at = await update_premium_status(user_id, BotConfig.SUBSCRIPTION_PLANS[matched_plan]["duration_days"])
+    plan_details = BotConfig.SUBSCRIPTION_PLANS[matched_plan]
+    
+    # Check for partial payment logic
+    # This assumes `confirmed_txn.get("amount")` is the amount received.
+    # If the user paid less than the full amount for the chosen plan.
+    if confirmed_txn.get("amount") < plan_details["amount"]:
+        remaining_amount = plan_details["amount"] - confirmed_txn.get("amount")
+        await message.reply_text(
+            f"You {user_name} have paid partially. To get full access, send ₹{remaining_amount:.2f} more. "
+            f"Please send the TXN ID for the remaining payment once done."
+        )
+        # Optionally, you could store the partial payment and link it to the user
+        # to track outstanding amounts. For simplicity, we'll just inform the user.
+        logger.info(f"User {user_id} made partial payment for {matched_plan} plan. Remaining: {remaining_amount}")
+        return
+
+    # If payment is complete and valid, grant access
+    expires_at = await update_premium_status(user_id, plan_details["duration_days"])
+
+    # Mark the transaction as used by this user
     await confirmed_upi_txns_collection.update_one(
-        {"_id": txn["_id"]},
+        {"_id": confirmed_txn["_id"]},
         {"$set": {"used_by_user_id": user_id, "used_at": now, "status": "used"}}
     )
 
     await message.reply_text(
-        f"🎉 Premium Activated!\nPlan: {matched_plan.capitalize()}\nExpires: `{expires_at.strftime('%Y-%m-%d %H:%M UTC')}`"
+        f"🎉 **Congratulations! Your premium access has been activated!**\n\n"
+        f"Plan: **{matched_plan.capitalize()}**\n"
+        f"Duration: **{plan_details['duration_days']} days**\n"
+        f"Expires On: `{expires_at.strftime('%Y-%m-%d %H:%M UTC')}`\n\n"
+        "Enjoy your premium features!"
     )
+    logger.info(f"User {user_id} successfully granted {matched_plan} premium with TXN ID: {txn_id}")
+
+
+# --- Handler for Payment Confirmation (Group Chat Listener) ---
 
 @app.on_message(filters.chat(BotConfig.TXN_GROUP_ID) & filters.text)
 async def process_group_message(client: Client, message: types.Message):
+    """
+    Listens for messages in the designated transaction confirmation group.
+    Parses TXN ID and amount from messages and stores them in MongoDB.
+    """
     text = message.text
+    logger.info(f"Received message in TXN Group {BotConfig.TXN_GROUP_ID}: {text[:200]}...") # Log first 200 chars
+
     txn_id = None
     amount = None
 
-    txn_patterns = [r'\b(?:TxnId|UTR|Ref|Transaction ID)[:\s]*([0-9]{10,20})']
-    amount_patterns = [r'(?:₹|INR|Rs)\s?(\d+(?:\.\d{1,2})?)']
+    # Regex patterns to extract Transaction ID
+    txn_id_patterns = [
+        r'(?:TxnId|UPI Ref No|UTR|Ref\. No\.|TrnId|Ref No|Transaction ID|Txn Id|Transaction ID)\D*(\d{10,20})',
+        r'(\d{10,20})\s+is\s+the\s+UPI\s+transaction\s+ID',
+        r'UPI\s+Ref\s+No\.\s*[:\s]*(\d{10,20})',
+        r'Transaction\s+ID\s*[:\s]*(\d{10,20})',
+        r'UTR\s*[:\s]*(\d{10,20})',
+        r'Ref\s*[:\s]*(\d{10,20})',
+        r'(\d{12})\s+is\s+the\s+UPI\s+Ref\s+No', # Specific for 12-digit UPI Ref No.
+    ]
 
-    for pattern in txn_patterns:
+    # Regex patterns to extract Amount
+    amount_patterns = [
+        r'(?:Rs|INR|₹)\s*(\d+(?:\.\d{1,2})?)',
+        r'(\d+(?:\.\d{1,2})?)\s*(?:Rs|INR|₹)',
+        r'amount\s*[:\s]*(\d+(?:\.\d{1,2})?)',
+        r'paid\s*(\d+(?:\.\d{1,2})?)',
+    ]
+
+    # Try to find TXN ID
+    for pattern in txn_id_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             txn_id = match.group(1)
             break
 
+    # Try to find Amount
     for pattern in amount_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(pattern, re.sub(r',', '', text), re.IGNORECASE) # Remove commas from numbers
         if match:
-            amount = float(match.group(1))
-            break
+            try:
+                amount = float(match.group(1))
+                if amount.is_integer(): # Store as int if it's a whole number
+                    amount = int(amount)
+                break
+            except ValueError:
+                amount = None # If conversion fails, amount is not valid
 
-    if txn_id and amount:
-        existing = await confirmed_upi_txns_collection.find_one({"txn_id": txn_id})
-        if not existing:
-            await confirmed_upi_txns_collection.insert_one({
-                "txn_id": txn_id,
-                "amount": amount,
-                "timestamp": datetime.utcnow(),
-                "original_message": text,
-                "used_by_user_id": None,
-                "used_at": None,
-                "status": "confirmed"
-            })
+    if txn_id and amount is not None:
+        # Check if this transaction ID already exists to prevent duplicates
+        existing_txn = await confirmed_upi_txns_collection.find_one({"txn_id": txn_id})
+        if existing_txn:
+            logger.info(f"Duplicate TXN ID '{txn_id}' received in group. Skipping storage.")
+            return
 
-# --- Main ---
+        transaction_data = {
+            "txn_id": txn_id,
+            "amount": amount,
+            "timestamp": datetime.utcnow(),
+            "original_message": text,
+            "used_by_user_id": None, # Initially not used by any user
+            "used_at": None,
+            "status": "confirmed" # Initial status
+        }
+        await confirmed_upi_txns_collection.insert_one(transaction_data)
+        logger.info(f"Stored confirmed UPI transaction: TXN ID={txn_id}, Amount={amount}")
+    else:
+        logger.info(f"Could not parse TXN ID or Amount from message in group: {text}")
+
 async def main_subscription_bot_logic():
-    await db.command("ping")
-    logger.info("MongoDB connected.")
+    """Main function to start the bot and ensure MongoDB indexes."""
+    logger.info("Starting Subscription Bot and ensuring MongoDB indexes...")
+    
+    # Ensure indexes for efficient database operations
+    try:
+        # Attempt to drop old 'id_1' index if it exists (from previous versions)
+        await db.users.drop_index("id_1")
+        logger.info("Dropped old 'id_1' index on users collection.")
+    except Exception as e:
+        logger.info(f"Could not drop 'id_1' index on users collection (might not exist or different name): {e}")
 
-    db.confirmed_upi_txns.create_index("txn_id", unique=True)
-    db.users.create_index("user_id", unique=True)
-    db.tokens.create_index("user_id", unique=True)
-    db.history.create_index("user_id", unique=True)
+    # Create unique and non-unique indexes
+    await db.confirmed_upi_txns.create_index("txn_id", unique=True)
+    await db.confirmed_upi_txns.create_index("timestamp")
+    await db.confirmed_upi_txns.create_index("used_by_user_id")
+    
+    await db.users.create_index("user_id", unique=True)
+    await db.tokens.create_index("user_id", unique=True)
+    await db.history.create_index("user_id", unique=True)
 
+    logger.info("MongoDB indexes ensured.")
+
+    # Start the Pyrogram client
     await app.start()
-    logger.info("Bot started.")
+    logger.info("Subscription Bot has connected to Telegram.")
+
+    # Keep the bot alive indefinitely
     await asyncio.Event().wait()
 
+
 if __name__ == "__main__":
+    logger.info("Script started. Entering main execution block for Subscription Bot.")
     try:
+        # Run the main bot logic
         app.run(main_subscription_bot_logic())
     except KeyboardInterrupt:
-        logger.info("Bot stopped.")
+        logger.info("Subscription Bot stopped by KeyboardInterrupt (Ctrl+C). Shutting down...")
+    except Exception as e:
+        logger.critical(f"An unhandled error occurred during bot startup or main execution: {e}", exc_info=True)
+    finally:
+        logger.info("Subscription Bot application exiting.")
+
+
