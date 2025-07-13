@@ -10,29 +10,39 @@ from bson.objectid import ObjectId
 
 # --- Logging Setup ---
 logging.basicConfig(
-    level=logging.DEBUG, # Changed to DEBUG for more detailed logs
+    level=logging.DEBUG, # Keep at DEBUG for detailed logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 # --- Bot Configuration Class ---
 class BotConfig:
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk")
-    API_ID = int(os.environ.get("API_ID", 29800015))
-    API_HASH = os.environ.get("API_HASH", "c8f37108be31ab9ea2818bfe533fbb6f")
-    MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0")
-    MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "spicybot")
-    UPI_LINK = os.environ.get("UPI_LINK", "upi://pay?pa=you@upi&pn=YourName&mc=0000&tid=00000000000000&tr=YourRef&am=1.00")
-    QR_CODE_IMAGE_URL = os.environ.get("QR_CODE_IMAGE_URL", "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR")
-    TXN_GROUP_ID = int(os.environ.get("TXN_GROUP_ID", -1002685844988))
+    # Your Telegram Bot Token obtained from @BotFather
+    BOT_TOKEN = "7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk" # Hardcoded value
+    # Your Telegram API ID and API Hash obtained from my.telegram.org
+    API_ID = 29800015 # Hardcoded value
+    API_HASH = "c8f37108be31ab9ea2818bfe533fbb6f" # Hardcoded value
+
+    # MongoDB Connection String
+    MONGO_URI = "mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0" # Hardcoded value
+    MONGO_DB_NAME = "spicybot" # Hardcoded value, shared with File-Sharing Bot
+
+    # UPI Payment Details
+    UPI_LINK = "upi://pay?pa=you@upi&pn=YourName&mc=0000&tid=00000000000000&tr=YourRef&am=1.00" # Hardcoded value
+    QR_CODE_IMAGE_URL = "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR" # Hardcoded value
+
+    # The ID of the private Telegram group where UPI SMS notifications are forwarded.
+    TXN_GROUP_ID = -1002685844988 # Hardcoded value
+
+    # Subscription Plans: Maps plan type to (amount_in_rupees, duration_in_days)
     SUBSCRIPTION_PLANS = {
         "weekly": {"amount": 49, "duration_days": 7},
         "monthly": {"amount": 149, "duration_days": 30},
     }
     PAYMENT_MESSAGE_DELETE_DELAY = 600
 
-    # Add an ADMIN_IDS list for debugging and future admin commands
-    ADMIN_IDS = [6612030110] # Replace with your actual Telegram User ID (integer)
+    # Your Telegram User ID for admin features/debugging
+    ADMIN_IDS = [6612030110] # Hardcoded value (your user ID)
 
 # --- MongoDB Connection Setup ---
 mongo_client = AsyncIOMotorClient(BotConfig.MONGO_URI)
@@ -51,7 +61,7 @@ app = Client(
     bot_token=BotConfig.BOT_TOKEN
 )
 
-# --- Helper Functions (unchanged, for brevity) ---
+# --- Helper Functions ---
 async def get_user_stats(user_id: int):
     user_data = await users_collection.find_one({"user_id": user_id})
     user_tokens = await tokens_collection.find_one({"user_id": user_id})
@@ -118,46 +128,54 @@ async def schedule_message_deletion(chat_id: int, message_id: int, delay: int):
 
 # --- Handlers for User Interaction (Private Chat) ---
 
-# NEW: Simple /ping command for testing responsiveness
 @app.on_message(filters.command("ping") & filters.private)
 async def ping_command(client: Client, message: types.Message):
-    """Responds to /ping with 'Pong!' to check bot's responsiveness."""
     logger.info(f"Received /ping command from user {message.from_user.id}")
     await message.reply_text("Pong!")
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: types.Message):
     user_id = message.from_user.id
-    logger.info(f"Received /start command from user {user_id}") # Added logging
-    user_stats = await get_user_stats(user_id)
+    logger.info(f"Received /start command from user {user_id}. Attempting to fetch user stats.")
+    
+    try:
+        user_stats = await get_user_stats(user_id)
 
-    status_text = "Free User"
-    if user_stats["is_premium"]:
-        status_text = f"Premium User (Expires: {user_stats['expires_at']})"
+        status_text = "Free User"
+        if user_stats["is_premium"]:
+            status_text = f"Premium User (Expires: {user_stats['expires_at']})"
 
-    response_text = (
-        f"👋 Hello {message.from_user.first_name}!\n\n"
-        f"📊 **Your Stats:**\n"
-        f"  - Status: {status_text}\n"
-        f"  - Active Premium Tokens: {user_stats['active_tokens_count']}\n"
-        f"  - Referrals: {user_stats['referral_count']}\n"
-        f"  - Saved Videos: {user_stats['saved_video_count']}\n"
-        f"  - Total Video Views: {user_stats['video_views']}\n\n"
-        "✨ **Unlock Premium Access!**\n"
-        "Choose a plan below to get started. After payment, reply with your Transaction ID."
-    )
+        response_text = (
+            f"👋 Hello {message.from_user.first_name}!\n\n"
+            f"📊 **Your Stats:**\n"
+            f"  - Status: {status_text}\n"
+            f"  - Active Premium Tokens: {user_stats['active_tokens_count']}\n"
+            f"  - Referrals: {user_stats['referral_count']}\n"
+            f"  - Saved Videos: {user_stats['saved_video_count']}\n"
+            f"  - Total Video Views: {user_stats['video_views']}\n\n"
+            "✨ **Unlock Premium Access!**\n"
+            "Choose a plan below to get started. After payment, reply with your Transaction ID."
+        )
 
-    keyboard = types.InlineKeyboardMarkup([
-        [
-            types.InlineKeyboardButton(
-                "🗓️ Weekly (₹49)", callback_data="pay_weekly"
-            ),
-            types.InlineKeyboardButton(
-                "🗓️ Monthly (₹149)", callback_data="pay_monthly"
-            )
-        ]
-    ])
-    await message.reply_text(response_text, reply_markup=keyboard, parse_mode="markdown")
+        keyboard = types.InlineKeyboardMarkup([
+            [
+                types.InlineKeyboardButton(
+                    "🗓️ Weekly (₹49)", callback_data="pay_weekly"
+                ),
+                types.InlineKeyboardButton(
+                    "🗓️ Monthly (₹149)", callback_data="pay_monthly"
+                )
+            ]
+        ])
+        await message.reply_text(response_text, reply_markup=keyboard, parse_mode="markdown")
+        logger.info(f"Successfully sent /start response to user {user_id}.")
+
+    except Exception as e:
+        logger.error(f"Error in start_command for user {user_id}: {e}", exc_info=True)
+        await message.reply_text(
+            "An error occurred while fetching your stats. Please try again later or contact support."
+        )
+
 
 async def send_payment_info(client: Client, message: types.Message, plan_type: str):
     plan_details = BotConfig.SUBSCRIPTION_PLANS.get(plan_type)
@@ -199,13 +217,13 @@ async def send_payment_info(client: Client, message: types.Message, plan_type: s
 
 @app.on_callback_query(filters.regex("pay_weekly"))
 async def pay_weekly_callback(client: Client, callback_query: types.CallbackQuery):
-    logger.info(f"Received pay_weekly callback from user {callback_query.from_user.id}") # Added logging
+    logger.info(f"Received pay_weekly callback from user {callback_query.from_user.id}")
     await callback_query.answer("You selected Weekly Plan. Sending payment details...")
     await send_payment_info(client, callback_query.message, "weekly")
 
 @app.on_callback_query(filters.regex("pay_monthly"))
 async def pay_monthly_callback(client: Client, callback_query: types.CallbackQuery):
-    logger.info(f"Received pay_monthly callback from user {callback_query.from_user.id}") # Added logging
+    logger.info(f"Received pay_monthly callback from user {callback_query.from_user.id}")
     await callback_query.answer("You selected Monthly Plan. Sending payment details...")
     await send_payment_info(client, callback_query.message, "monthly")
 
@@ -361,7 +379,6 @@ async def main_subscription_bot_logic():
     await app.start()
     logger.info("Subscription Bot has connected to Telegram.")
 
-    # Keep the bot alive indefinitely
     await asyncio.Event().wait()
 
 
