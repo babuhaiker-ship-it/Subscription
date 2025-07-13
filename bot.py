@@ -27,7 +27,7 @@ class BotConfig:
     # This should ideally be a business UPI link or a payment gateway link for privacy.
     UPI_LINK = os.environ.get("UPI_LINK", "upi://pay?pa=you@upi&pn=YourName&mc=0000&tid=00000000000000&tr=YourRef&am=1.00")
     # Optional: URL to a QR code image. If not provided, only text instructions will be sent.
-    QR_CODE_IMAGE_URL = os.environ.get("QR_CODE_IMAGE_URL", "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR")
+    QR_CODE_IMAGE_URL = os.environ.get("QR_CODE_IMAGE_IMAGE_URL", "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR")
 
     # The ID of the private Telegram group where UPI SMS notifications are forwarded.
     # The bot must be an admin in this group with read message permissions.
@@ -69,7 +69,8 @@ async def get_user_stats(user_id: int):
     Fetches comprehensive statistics for a given user from MongoDB.
     Includes premium status, active tokens, referral count, saved video count, and video views.
     """
-    user_data = await users_collection.find_one({"id": user_id})
+    # *** COMPATIBILITY CHANGE: Using 'user_id' for users_collection ***
+    user_data = await users_collection.find_one({"user_id": user_id})
     user_tokens = await tokens_collection.find_one({"user_id": user_id})
     user_history = await history_collection.find_one({"user_id": user_id})
 
@@ -89,9 +90,9 @@ async def get_user_stats(user_id: int):
             latest_expiry = max(token["expires_at"] for token in active_tokens)
             expires_at = latest_expiry.strftime("%Y-%m-%d %H:%M UTC")
 
-    referral_count = user_data.get("referred_users_count", 0) if user_data else 0
-    saved_video_count = len(user_data.get("saved_videos", [])) if user_data else 0
-    video_views = user_history.get("views", 0) if user_history else 0
+    referral_count = user_data.get("referral_count", 0) if user_data else 0 # Main bot uses 'referral_count'
+    saved_video_count = len(user_data.get("bookmarked_videos", [])) if user_data else 0 # Main bot uses 'bookmarked_videos'
+    video_views = user_history.get("views", 0) if user_history else 0 # Main bot uses 'views' in history
 
     return {
         "is_premium": is_premium,
@@ -118,14 +119,14 @@ async def update_premium_status(user_id: int, duration_days: int):
 
     # Atomically update the tokens collection
     await tokens_collection.update_one(
-        {"user_id": user_id},
+        {"user_id": user_id}, # *** COMPATIBILITY CHANGE: Using 'user_id' for tokens_collection ***
         {"$push": {"tokens": token_data}},
         upsert=True
     )
 
     # Update user's last_premium_check_status in the users collection
     await users_collection.update_one(
-        {"id": user_id},
+        {"user_id": user_id}, # *** COMPATIBILITY CHANGE: Using 'user_id' for users_collection ***
         {"$set": {"last_premium_check_status": True}},
         upsert=True
     )
@@ -398,14 +399,25 @@ async def process_group_message(client: Client, message: types.Message):
 if __name__ == "__main__":
     print("Starting Subscription Bot...")
     # Ensure MongoDB indexes for faster lookups
+    # *** COMPATIBILITY CHANGE: Using 'user_id' for users and tokens collections ***
+    # This aligns with your main bot's schema.
+
+    try:
+        # Attempt to drop the old 'id_1' index if it exists from previous runs
+        db.users.drop_index("id_1")
+        print("Dropped old 'id_1' index on users collection.")
+    except Exception as e:
+        print(f"Could not drop 'id_1' index (might not exist or different name): {e}")
+
     # Index for txn_id for quick lookup
     db.confirmed_upi_txns.create_index("txn_id", unique=True)
     # Index for timestamp to filter recent transactions
     db.confirmed_upi_txns.create_index("timestamp")
     # Index for used_by_user_id to check if a transaction is claimed
     db.confirmed_upi_txns.create_index("used_by_user_id")
-    # Index for user ID in users and tokens collection
-    db.users.create_index("id", unique=True)
+    
+    # Index for user ID in users and tokens collection (now consistent with main bot)
+    db.users.create_index("user_id", unique=True)
     db.tokens.create_index("user_id", unique=True)
     db.history.create_index("user_id", unique=True)
 
