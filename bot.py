@@ -43,8 +43,8 @@ class BotConfig:
         199.0: "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=199&cu=INR" # UPI link for 199
     }
     QR_CODE_IMAGE_URLS = {
-        69.0: "https://i.postimg.cc/28W3hCmz/Image.jpg", # Placeholder QR for 69
-        199.0: "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199
+        69.0: "https://placehold.co/400x400/000000/FFFFFF?text=QR+Code+69", # Placeholder QR for 69
+        199.0: "https://placehold.co/400x400/000000/FFFFFF?text=QR+Code+199" # Placeholder QR for 199
     }
 
     # ID of the Telegram Group where UPI SMS notifications are forwarded
@@ -86,6 +86,8 @@ try:
 except Exception as e:
     logger.critical(f"Error connecting to MongoDB: {e}", exc_info=True)
     client = None # Ensure client is None if connection fails
+    # Exit if MongoDB connection fails, as the bot cannot function without it
+    exit(1) 
 
 # --- Helper Functions ---
 
@@ -255,19 +257,23 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    if not confirmed_txn_collection:
+    # No need to check 'if not confirmed_txn_collection:' here.
+    # If it's None, the script should have exited during initialization.
+    # If there's a problem with the DB connection *after* initialization,
+    # the find_one call will raise an error, which the error_handler will catch.
+    try:
+        confirmed_payment = confirmed_txn_collection.find_one({
+            "txn_id": txn_id,
+            "timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
+            "status": "confirmed", # Assuming 'confirmed' status is set by the group message handler
+            "used_by_user_id": {"$exists": False} # Ensure this TXN ID hasn't been used by another user
+        })
+    except Exception as e:
+        logger.error(f"Error querying confirmed_upi_txns for TXN ID {txn_id}: {e}", exc_info=True)
         await update.message.reply_text(
-            "❌ Payment verification system is currently unavailable. Please try again later or contact support."
+            "❌ Payment verification system is currently experiencing issues. Please try again later or contact support."
         )
-        logger.error("Confirmed TXN collection not initialized. Cannot verify payments.")
         return
-
-    confirmed_payment = confirmed_txn_collection.find_one({
-        "txn_id": txn_id,
-        "timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
-        "status": "confirmed", # Assuming 'confirmed' status is set by the group message handler
-        "used_by_user_id": {"$exists": False} # Ensure this TXN ID hasn't been used by another user
-    })
 
     if not confirmed_payment:
         await update.message.reply_text(
@@ -278,12 +284,12 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     received_amount = confirmed_payment["amount"]
 
-    # --- Partial Payment Logic ---
+    # --- Payment Verification Logic ---
     if received_amount < selected_plan_amount:
         remaining_amount = selected_plan_amount - received_amount
         await update.message.reply_text(
             f"You {username} have paid partially. To get full access for the ₹{int(selected_plan_amount)} plan, "
-            f"send ₹{remaining_amount:.2f} more. Please make a new payment for the *full* amount "
+            f"you need to pay ₹{remaining_amount:.2f} more. Please make a *new* payment for the *full* amount "
             f"of ₹{int(selected_plan_amount)} and send the new TXN ID."
         )
         logger.info(f"User {user_id} paid partially. Received {received_amount}, expected {selected_plan_amount}.")
@@ -291,7 +297,7 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     elif received_amount > selected_plan_amount:
         await update.message.reply_text(
             f"You {username} have paid more than the selected plan amount (₹{int(selected_plan_amount)}). "
-            f"Please ensure your payment matches the plan you selected. Contact support for assistance."
+            f"Please ensure your payment matches the plan you selected. Contact support for assistance regarding the excess payment."
         )
         logger.warning(f"User {user_id} paid more. Received {received_amount}, expected {selected_plan_amount}.")
         return
@@ -312,11 +318,16 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if expires_at_ist:
         # Mark the transaction as used in the database
-        confirmed_txn_collection.update_one(
-            {"_id": confirmed_payment["_id"]},
-            {"$set": {"used_by_user_id": user_id, "used_at": datetime.utcnow()}}
-        )
-        logger.info(f"TXN ID {txn_id} marked as used by user {user_id}.")
+        try:
+            confirmed_txn_collection.update_one(
+                {"_id": confirmed_payment["_id"]},
+                {"$set": {"used_by_user_id": user_id, "used_at": datetime.utcnow()}}
+            )
+            logger.info(f"TXN ID {txn_id} marked as used by user {user_id}.")
+        except Exception as e:
+            logger.error(f"Error marking TXN ID {txn_id} as used: {e}", exc_info=True)
+            # Even if marking as used fails, we've already granted access, so proceed with success message
+            pass 
 
         await update.message.reply_text(
             f"Dear {username}, 🎉\n\n"
@@ -364,9 +375,14 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.info(f"Parsed TXN ID: {txn_id}, Amount: {amount} from group message.")
 
         # Check if the TXN ID already exists to prevent duplicates
-        if confirmed_txn_collection.find_one({"txn_id": txn_id}):
-            logger.info(f"TXN ID {txn_id} already exists in confirmed_upi_txns. Skipping insertion.")
-            return
+        try:
+            if confirmed_txn_collection.find_one({"txn_id": txn_id}):
+                logger.info(f"TXN ID {txn_id} already exists in confirmed_upi_txns. Skipping insertion.")
+                return
+        except Exception as e:
+            logger.error(f"Error checking for existing TXN ID {txn_id} in DB: {e}", exc_info=True)
+            # Continue trying to insert, as this might be a transient DB issue
+            pass
 
         # Store the confirmed transaction in MongoDB
         try:
@@ -387,13 +403,17 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error and send a message to the user."""
     logger.error(f"Update {update} caused error {context.error}", exc_info=True)
-    if update.effective_message:
+    
+    # Safely check if update.effective_message exists before trying to reply
+    if update and update.effective_message:
         try:
             await update.effective_message.reply_text(
                 "An unexpected error occurred. Please try again later."
             )
         except Exception as reply_e:
             logger.error(f"Failed to send error reply to user: {reply_e}")
+    else:
+        logger.warning("Error occurred but no effective_message to reply to.")
 
 
 def main() -> None:
