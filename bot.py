@@ -10,6 +10,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
+    CallbackQueryHandler, # Import CallbackQueryHandler
 )
 import uuid
 import re # Import regex module
@@ -28,19 +29,27 @@ class BotConfig:
     TOKENS_COLLECTION_NAME = "tokens"
     CONFIRMED_TXN_COLLECTION_NAME = "confirmed_upi_txns" # New collection to store confirmed UPI transactions
 
-    # UPI Link and QR Code Image URL
-    UPI_LINK = "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=99&cu=INR" # REPLACE with your actual UPI link
-    QR_CODE_IMAGE_URL = "https://i.postimg.cc/28W3hCmz/Image.jpg" # REPLACE with your actual QR code image URL
+    # Define subscription plans and their corresponding durations in days
+    SUBSCRIPTION_PLANS = {
+        69.0: 7,   # ₹69 for 7 days (Weekly Trial)
+        199.0: 30  # ₹199 for 30 days (Monthly)
+    }
+
+    # UPI Links and QR Code Image URLs for each plan amount
+    # IMPORTANT: Replace these with your actual dynamic links/QR codes for each amount
+    # For demonstration, placeholders are used for QR codes.
+    UPI_LINKS = {
+        69.0: "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=69&cu=INR", # UPI link for 69
+        199.0: "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=199&cu=INR" # UPI link for 199
+    }
+    QR_CODE_IMAGE_URLS = {
+        69.0: "https://i.postimg.cc/28W3hCmz/Image.jpg", # Placeholder QR for 69
+        199.0: "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199
+    }
 
     # ID of the Telegram Group where UPI SMS notifications are forwarded
     # The bot MUST be an admin in this group with 'Read All Messages' permission.
     TXN_GROUP_ID = -1002685844988 # REPLACE WITH YOUR ACTUAL UPI SMS FORWARDING GROUP CHAT ID (e.g., -100xxxxxxxxxx)
-
-    # Define subscription plans and their corresponding durations in days
-    SUBSCRIPTION_PLANS = {
-        49.0: 7,   # ₹49 for 7 days
-        149.0: 30  # ₹149 for 30 days
-    }
 
 try:
     config = BotConfig()
@@ -143,29 +152,81 @@ async def update_premium_status(user_id: int, username: str, duration_days: int)
 # --- Telegram Bot Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a welcome message and payment instructions."""
+    """Sends a welcome message and offers subscription plans."""
     user = update.effective_user
     username = user.username if user.username else user.first_name
 
-    message = (
-        f"Dear {username}, to unlock premium access please pay:\n\n"
-        "📌 7 days: ₹49\n"
-        "📌 1 month: ₹149\n\n"
-        "Scan the QR or click the UPI link below 👇\n\n"
-        f"🔗 {config.UPI_LINK}\n\n"
-        "Once done, reply with: `TXN ID <your_transaction_id>`\n"
-        "Example: `TXN ID 264861XXXXX`"
+    welcome_message = (
+        f"Dear {username}, this is Nyraa Exclusive. Here you can buy tokens. "
+        "Please select a plan to continue."
     )
 
-    if config.QR_CODE_IMAGE_URL:
-        await update.message.reply_photo(photo=config.QR_CODE_IMAGE_URL, caption=message, parse_mode="Markdown")
-    else:
-        await update.message.reply_text(message, parse_mode="Markdown")
+    keyboard = [
+        [InlineKeyboardButton("₹69 Weekly Trial", callback_data="plan_69")],
+        [InlineKeyboardButton("₹199 Monthly", callback_data="plan_199")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(welcome_message, reply_markup=reply_markup)
+
+async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles inline button presses for plan selection."""
+    query = update.callback_query
+    await query.answer() # Acknowledge the callback query
+
+    user = query.from_user
+    user_id = user.id
+    username = user.username if user.username else user.first_name
+    
+    callback_data = query.data
+
+    if callback_data.startswith("plan_"):
+        try:
+            amount_str = callback_data.split("_")[1]
+            selected_amount = float(amount_str)
+        except (IndexError, ValueError):
+            logger.error(f"Invalid callback data received: {callback_data}")
+            await query.edit_message_text("An error occurred. Please try again or contact support.")
+            return
+
+        if selected_amount not in config.SUBSCRIPTION_PLANS:
+            await query.edit_message_text("Invalid plan selected. Please choose a valid plan.")
+            logger.warning(f"User {user_id} selected an invalid plan amount: {selected_amount}")
+            return
+
+        # Store the selected amount in user_data for later verification
+        context.user_data['selected_plan_amount'] = selected_amount
+        logger.info(f"User {user_id} selected plan for amount: {selected_amount}")
+
+        upi_link = config.UPI_LINKS.get(selected_amount)
+        qr_code_url = config.QR_CODE_IMAGE_URLS.get(selected_amount)
+        
+        if not upi_link:
+            await query.edit_message_text("Payment link not available for this plan. Please contact support.")
+            logger.error(f"UPI link missing for amount: {selected_amount}")
+            return
+
+        payment_message = (
+            f"You have selected the ₹{int(selected_amount)} plan.\n\n"
+            "Scan the QR or click the UPI link below 👇\n\n"
+            f"🔗 {upi_link}\n\n"
+            "After you have sent the payment, send your TXN ID to confirm.\n"
+            "Example: `TXN ID 264861XXXXX`"
+        )
+
+        if qr_code_url:
+            # Using reply_photo on the original message to send a new message with photo
+            await query.message.reply_photo(photo=qr_code_url, caption=payment_message, parse_mode="Markdown")
+            # Optionally delete the original message with buttons if desired
+            # await query.message.delete() 
+        else:
+            await query.edit_message_text(payment_message, parse_mode="Markdown")
+
 
 async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handles messages containing 'TXN ID' to process payments.
-    Now checks against the `confirmed_upi_txns` collection.
+    Now checks against the `confirmed_upi_txns` collection and selected plan amount.
     """
     user = update.effective_user
     user_id = user.id
@@ -186,7 +247,14 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     txn_id = parts[2].strip()
     logger.info(f"User {user_id} ({username}) sent TXN ID: {txn_id}")
 
-    # --- Check against confirmed_upi_txns collection ---
+    # Retrieve the selected plan amount from user_data
+    selected_plan_amount = context.user_data.get('selected_plan_amount')
+    if selected_plan_amount is None:
+        await update.message.reply_text(
+            "Please select a plan first using the /start command before sending a TXN ID."
+        )
+        return
+
     if not confirmed_txn_collection:
         await update.message.reply_text(
             "❌ Payment verification system is currently unavailable. Please try again later or contact support."
@@ -194,9 +262,6 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error("Confirmed TXN collection not initialized. Cannot verify payments.")
         return
 
-    # Look for the TXN ID in the confirmed_upi_txns collection
-    # Also, ensure it's a recent transaction (e.g., within the last 24 hours)
-    # and that it hasn't been used by another user already (optional, but good for security)
     confirmed_payment = confirmed_txn_collection.find_one({
         "txn_id": txn_id,
         "timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
@@ -211,15 +276,35 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.warning(f"TXN ID {txn_id} not found in confirmed_upi_txns or already used.")
         return
 
-    amount = confirmed_payment["amount"]
-    duration_days = config.SUBSCRIPTION_PLANS.get(amount)
+    received_amount = confirmed_payment["amount"]
+
+    # --- Partial Payment Logic ---
+    if received_amount < selected_plan_amount:
+        remaining_amount = selected_plan_amount - received_amount
+        await update.message.reply_text(
+            f"You {username} have paid partially. To get full access for the ₹{int(selected_plan_amount)} plan, "
+            f"send ₹{remaining_amount:.2f} more. Please make a new payment for the *full* amount "
+            f"of ₹{int(selected_plan_amount)} and send the new TXN ID."
+        )
+        logger.info(f"User {user_id} paid partially. Received {received_amount}, expected {selected_plan_amount}.")
+        return
+    elif received_amount > selected_plan_amount:
+        await update.message.reply_text(
+            f"You {username} have paid more than the selected plan amount (₹{int(selected_plan_amount)}). "
+            f"Please ensure your payment matches the plan you selected. Contact support for assistance."
+        )
+        logger.warning(f"User {user_id} paid more. Received {received_amount}, expected {selected_plan_amount}.")
+        return
+    # If received_amount == selected_plan_amount, proceed with full access granting
+
+    duration_days = config.SUBSCRIPTION_PLANS.get(selected_plan_amount)
 
     if not duration_days:
         await update.message.reply_text(
-            "❌ Payment received, but the amount does not match any subscription plan. "
+            "❌ An internal error occurred: Plan duration not found for the selected amount. "
             "Please contact support if you believe this is an error."
         )
-        logger.warning(f"TXN ID {txn_id} found, but amount {amount} does not match any plan.")
+        logger.error(f"No duration found for selected plan amount {selected_plan_amount}.")
         return
 
     # --- Update MongoDB and mark transaction as used ---
@@ -235,17 +320,20 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         await update.message.reply_text(
             f"Dear {username}, 🎉\n\n"
-            f"✅ Your payment has been confirmed.\n"
+            f"✅ Your payment of ₹{int(selected_plan_amount)} has been confirmed.\n"
             f"🗓️ Premium access granted for {duration_days} days!\n"
             f"Expires on: {expires_at_ist.strftime('%d %B %Y %H:%M %Z')}.\n\n"
             "You can now enjoy premium content with the File-Sharing Bot!"
         )
-        logger.info(f"Premium access granted for user {user_id} for {duration_days} days.")
+        logger.info(f"Premium access granted for user {user_id} for {duration_days} days with TXN ID {txn_id}.")
+        # Clear the selected plan from user_data after successful payment
+        if 'selected_plan_amount' in context.user_data:
+            del context.user_data['selected_plan_amount']
     else:
         await update.message.reply_text(
             "An error occurred while updating your premium status. Please try again later or contact support."
         )
-        logger.error(f"Failed to update premium status for user {user_id}.")
+        logger.error(f"Failed to update premium status for user {user_id} with TXN ID {txn_id}.")
 
 # --- New Handler: Listen to messages in the UPI TXN Group ---
 # This handler is registered directly in main() to ensure it's part of the application.
@@ -319,6 +407,7 @@ def main() -> None:
     # Register handlers for private chat with the user
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_txn_id))
+    application.add_handler(CallbackQueryHandler(button_callback_handler)) # New handler for inline buttons
 
     # Register handler for messages coming from the specific TXN group
     application.add_handler(MessageHandler(filters.Chat(config.TXN_GROUP_ID) & filters.TEXT & ~filters.COMMAND, chat_id_handler))
@@ -333,3 +422,4 @@ if __name__ == "__main__":
     if client:
         client.close()
         logger.info("MongoDB connection closed.")
+
