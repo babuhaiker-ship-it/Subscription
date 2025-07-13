@@ -43,8 +43,8 @@ class BotConfig:
         199.0: "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=199&cu=INR" # UPI link for 199
     }
     QR_CODE_IMAGE_URLS = {
-        69.0: "https://placehold.co/400x400/000000/FFFFFF?text=QR+Code+69", # Placeholder QR for 69
-        199.0: "https://placehold.co/400x400/000000/FFFFFF?text=QR+Code+199" # Placeholder QR for 199
+        69.0: "https://i.postimg.cc/28W3hCmz/Image.jpg", # Placeholder QR for 69
+        199.0: "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199
     }
 
     # ID of the Telegram Group where UPI SMS notifications are forwarded
