@@ -2,67 +2,48 @@ import os
 import re
 import asyncio
 from datetime import datetime, timedelta
-import logging # Import logging
+import logging
 
 from pyrogram import Client, filters, types
 from motor.motor_asyncio import AsyncIOMotorClient
-from bson.objectid import ObjectId # For potential future use with _id if needed
+from bson.objectid import ObjectId
 
 # --- Logging Setup ---
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG, # Changed to DEBUG for more detailed logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 # --- Bot Configuration Class ---
-# This class holds all the essential configuration details for your bot.
-# IMPORTANT: Replace placeholder values with your actual credentials and IDs.
 class BotConfig:
-    # Your Telegram Bot Token obtained from @BotFather
     BOT_TOKEN = os.environ.get("BOT_TOKEN", "7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk")
-
-    # Your Telegram API ID and API Hash obtained from my.telegram.org
-    API_ID = int(os.environ.get("API_ID", 29800015)) # Replace with your API ID
+    API_ID = int(os.environ.get("API_ID", 29800015))
     API_HASH = os.environ.get("API_HASH", "c8f37108be31ab9ea2818bfe533fbb6f")
-
-    # MongoDB Connection String
-    # Example: "mongodb://localhost:27017/" or "mongodb+srv://user:pass@cluster.mongodb.net/dbname?retryWrites=true&w=majority"
     MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0")
-    MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "spicybot") # Shared with File-Sharing Bot
-
-    # UPI Payment Details
-    # This should ideally be a business UPI link or a payment gateway link for privacy.
+    MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "spicybot")
     UPI_LINK = os.environ.get("UPI_LINK", "upi://pay?pa=you@upi&pn=YourName&mc=0000&tid=00000000000000&tr=YourRef&am=1.00")
-    # Optional: URL to a QR code image. If not provided, only text instructions will be sent.
     QR_CODE_IMAGE_URL = os.environ.get("QR_CODE_IMAGE_URL", "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR")
-
-    # The ID of the private Telegram group where UPI SMS notifications are forwarded.
-    # The bot must be an admin in this group with read message permissions.
-    TXN_GROUP_ID = int(os.environ.get("TXN_GROUP_ID", -1001234567890)) # Replace with your actual group ID
-
-    # Subscription Plans: Maps plan type to (amount_in_rupees, duration_in_days)
+    TXN_GROUP_ID = int(os.environ.get("TXN_GROUP_ID", -1002685844988))
     SUBSCRIPTION_PLANS = {
         "weekly": {"amount": 49, "duration_days": 7},
         "monthly": {"amount": 149, "duration_days": 30},
     }
+    PAYMENT_MESSAGE_DELETE_DELAY = 600
 
-    # Message deletion delay in seconds for payment info messages
-    PAYMENT_MESSAGE_DELETE_DELAY = 600 # 10 minutes
+    # Add an ADMIN_IDS list for debugging and future admin commands
+    ADMIN_IDS = [YOUR_TELEGRAM_USER_ID_HERE] # Replace with your actual Telegram User ID (integer)
 
 # --- MongoDB Connection Setup ---
-# Initialize the MongoDB client and select the database.
 mongo_client = AsyncIOMotorClient(BotConfig.MONGO_URI)
 db = mongo_client[BotConfig.MONGO_DB_NAME]
 
-# Collections (shared with File-Sharing Bot and new for this bot)
 users_collection = db.users
 tokens_collection = db.tokens
-history_collection = db.history # For user stats (e.g., video views)
-confirmed_upi_txns_collection = db.confirmed_upi_txns # New for this bot
+history_collection = db.history
+confirmed_upi_txns_collection = db.confirmed_upi_txns
 
 # --- Pyrogram Client Initialization ---
-# Create the Pyrogram client instance.
 app = Client(
     "SubscriptionBot",
     api_id=BotConfig.API_ID,
@@ -70,13 +51,8 @@ app = Client(
     bot_token=BotConfig.BOT_TOKEN
 )
 
-# --- Helper Functions ---
-
+# --- Helper Functions (unchanged, for brevity) ---
 async def get_user_stats(user_id: int):
-    """
-    Fetches comprehensive statistics for a given user from MongoDB.
-    Includes premium status, active tokens, referral count, saved video count, and video views.
-    """
     user_data = await users_collection.find_one({"user_id": user_id})
     user_tokens = await tokens_collection.find_one({"user_id": user_id})
     user_history = await history_collection.find_one({"user_id": user_id})
@@ -93,7 +69,6 @@ async def get_user_stats(user_id: int):
         active_tokens_count = len(active_tokens)
         if active_tokens_count > 0:
             is_premium = True
-            # Find the latest expiry date among active tokens
             latest_expiry = max(token["expires_at"] for token in active_tokens)
             expires_at = latest_expiry.strftime("%Y-%m-%d %H:%M UTC")
 
@@ -111,27 +86,21 @@ async def get_user_stats(user_id: int):
     }
 
 async def update_premium_status(user_id: int, duration_days: int):
-    """
-    Grants premium access to a user by adding a new token and updating their status.
-    This mimics the /addtoken command of the File-Sharing Bot.
-    """
     expires_at = datetime.utcnow() + timedelta(days=duration_days)
     token_data = {
-        "token_id": str(ObjectId()), # Unique ID for this token
+        "token_id": str(ObjectId()),
         "is_admin_granted": True,
         "granted_at": datetime.utcnow(),
         "expires_at": expires_at,
-        "granted_by": "SubscriptionBot", # Indicate source of the token
+        "granted_by": "SubscriptionBot",
     }
 
-    # Atomically update the tokens collection
     await tokens_collection.update_one(
         {"user_id": user_id},
         {"$push": {"tokens": token_data}},
         upsert=True
     )
 
-    # Update user's last_premium_check_status in the users collection
     await users_collection.update_one(
         {"user_id": user_id},
         {"$set": {"last_premium_check_status": True}},
@@ -140,10 +109,6 @@ async def update_premium_status(user_id: int, duration_days: int):
     return expires_at
 
 async def schedule_message_deletion(chat_id: int, message_id: int, delay: int):
-    """
-    Schedules the deletion of a specific message after a given delay.
-    Used for sensitive payment information.
-    """
     await asyncio.sleep(delay)
     try:
         await app.delete_messages(chat_id, message_id)
@@ -153,12 +118,17 @@ async def schedule_message_deletion(chat_id: int, message_id: int, delay: int):
 
 # --- Handlers for User Interaction (Private Chat) ---
 
+# NEW: Simple /ping command for testing responsiveness
+@app.on_message(filters.command("ping") & filters.private)
+async def ping_command(client: Client, message: types.Message):
+    """Responds to /ping with 'Pong!' to check bot's responsiveness."""
+    logger.info(f"Received /ping command from user {message.from_user.id}")
+    await message.reply_text("Pong!")
+
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: types.Message):
-    """
-    Handles the /start command. Displays user stats and subscription options.
-    """
     user_id = message.from_user.id
+    logger.info(f"Received /start command from user {user_id}") # Added logging
     user_stats = await get_user_stats(user_id)
 
     status_text = "Free User"
@@ -190,10 +160,6 @@ async def start_command(client: Client, message: types.Message):
     await message.reply_text(response_text, reply_markup=keyboard, parse_mode="markdown")
 
 async def send_payment_info(client: Client, message: types.Message, plan_type: str):
-    """
-    Sends payment instructions to the user, including UPI link and optional QR code.
-    Schedules the message for auto-deletion.
-    """
     plan_details = BotConfig.SUBSCRIPTION_PLANS.get(plan_type)
     if not plan_details:
         await message.reply_text("Invalid subscription plan selected. Please try again.")
@@ -225,7 +191,6 @@ async def send_payment_info(client: Client, message: types.Message, plan_type: s
         sent_message = await message.reply_text(payment_instructions, parse_mode="markdown")
 
     if sent_message:
-        # Schedule deletion of the payment message
         asyncio.create_task(
             schedule_message_deletion(
                 message.chat.id, sent_message.id, BotConfig.PAYMENT_MESSAGE_DELETE_DELAY
@@ -234,36 +199,24 @@ async def send_payment_info(client: Client, message: types.Message, plan_type: s
 
 @app.on_callback_query(filters.regex("pay_weekly"))
 async def pay_weekly_callback(client: Client, callback_query: types.CallbackQuery):
-    """
-    Handles the 'pay_weekly' inline keyboard callback.
-    """
+    logger.info(f"Received pay_weekly callback from user {callback_query.from_user.id}") # Added logging
     await callback_query.answer("You selected Weekly Plan. Sending payment details...")
     await send_payment_info(client, callback_query.message, "weekly")
 
 @app.on_callback_query(filters.regex("pay_monthly"))
 async def pay_monthly_callback(client: Client, callback_query: types.CallbackQuery):
-    """
-    Handles the 'pay_monthly' inline keyboard callback.
-    """
+    logger.info(f"Received pay_monthly callback from user {callback_query.from_user.id}") # Added logging
     await callback_query.answer("You selected Monthly Plan. Sending payment details...")
     await send_payment_info(client, callback_query.message, "monthly")
 
 @app.on_message(filters.private & filters.regex(r'^\d{10,20}$'))
 async def handle_txn_id(client: Client, message: types.Message):
-    """
-    Handles messages that are potential UPI Transaction IDs from users.
-    Verifies the transaction against confirmed payments and grants premium.
-    """
     user_id = message.from_user.id
     txn_id = message.text.strip()
     logger.info(f"User {user_id} sent potential TXN ID: {txn_id}")
 
     await message.reply_chat_action("typing")
 
-    # Search for the transaction in the confirmed_upi_txns collection
-    # - Match txn_id
-    # - Ensure it's recent (e.g., within last 24 hours)
-    # - Ensure it hasn't been used by another user
     now = datetime.utcnow()
     one_day_ago = now - timedelta(days=1)
 
@@ -271,7 +224,7 @@ async def handle_txn_id(client: Client, message: types.Message):
         "txn_id": txn_id,
         "timestamp": {"$gte": one_day_ago},
         "$or": [
-            {"used_by_user_id": {"$exists": False}}, # Not used yet
+            {"used_by_user_id": {"$exists": False}},
             {"used_by_user_id": None}
         ]
     })
@@ -287,7 +240,6 @@ async def handle_txn_id(client: Client, message: types.Message):
         )
         return
 
-    # Validate the amount against subscription plans
     matched_plan = None
     for plan_type, details in BotConfig.SUBSCRIPTION_PLANS.items():
         if confirmed_txn.get("amount") == details["amount"]:
@@ -301,18 +253,15 @@ async def handle_txn_id(client: Client, message: types.Message):
             f"Please ensure you pay either ₹{BotConfig.SUBSCRIPTION_PLANS['weekly']['amount']} (Weekly) "
             f"or ₹{BotConfig.SUBSCRIPTION_PLANS['monthly']['amount']} (Monthly)."
         )
-        # Optionally, mark this transaction as 'invalid_amount' to prevent future checks
         await confirmed_upi_txns_collection.update_one(
             {"_id": confirmed_txn["_id"]},
             {"$set": {"status": "amount_mismatch", "checked_at": now}}
         )
         return
 
-    # Grant premium access
     plan_details = BotConfig.SUBSCRIPTION_PLANS[matched_plan]
     expires_at = await update_premium_status(user_id, plan_details["duration_days"])
 
-    # Mark the transaction as used
     await confirmed_upi_txns_collection.update_one(
         {"_id": confirmed_txn["_id"]},
         {"$set": {"used_by_user_id": user_id, "used_at": now, "status": "used"}}
@@ -332,70 +281,58 @@ async def handle_txn_id(client: Client, message: types.Message):
 
 @app.on_message(filters.chat(BotConfig.TXN_GROUP_ID) & filters.text)
 async def process_group_message(client: Client, message: types.Message):
-    """
-    Listens to messages in the configured TXN_GROUP_ID, parses UPI SMS notifications,
-    and stores confirmed transactions in MongoDB.
-    """
     text = message.text
-    logger.info(f"Received message in TXN Group {BotConfig.TXN_GROUP_ID}: {text[:100]}...") # Log first 100 chars
+    logger.info(f"Received message in TXN Group {BotConfig.TXN_GROUP_ID}: {text[:100]}...")
 
     txn_id = None
     amount = None
 
-    # Regex to extract Transaction ID (TxnId, UPI Ref No, UTR, Ref. No. etc.)
     txn_id_patterns = [
         r'(?:TxnId|UPI Ref No|UTR|Ref\. No\.|TrnId|Ref No|Transaction ID|Txn Id)\D*(\d{10,20})',
-        r'(\d{10,20})\s+is\s+the\s+UPI\s+transaction\s+ID', # Common pattern
+        r'(\d{10,20})\s+is\s+the\s+UPI\s+transaction\s+ID',
         r'UPI\s+Ref\s+No\.\s*[:\s]*(\d{10,20})',
         r'Transaction\s+ID\s*[:\s]*(\d{10,20})',
         r'UTR\s*[:\s]*(\d{10,20})',
         r'Ref\s*[:\s]*(\d{10,20})',
     ]
 
-    # Regex to extract Amount (Rs., INR, ₹)
     amount_patterns = [
-        r'(?:Rs|INR|₹)\s*(\d+(?:\.\d{1,2})?)', # Matches Rs 100 or Rs 100.50
+        r'(?:Rs|INR|₹)\s*(\d+(?:\.\d{1,2})?)',
         r'(\d+(?:\.\d{1,2})?)\s*(?:Rs|INR|₹)',
         r'amount\s*[:\s]*(\d+(?:\.\d{1,2})?)',
     ]
 
-    # Try to find Transaction ID
     for pattern in txn_id_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             txn_id = match.group(1)
             break
 
-    # Try to find Amount
     for pattern in amount_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             try:
                 amount = float(match.group(1))
-                # Convert to integer if it's a whole number, as UPI amounts are often whole.
-                # Or keep as float for more precision. For this bot, we expect whole numbers.
                 if amount.is_integer():
                     amount = int(amount)
                 break
             except ValueError:
-                amount = None # Keep amount as None if conversion fails
+                amount = None
 
     if txn_id and amount is not None:
-        # Check for duplicate transaction ID to avoid reprocessing same SMS
         existing_txn = await confirmed_upi_txns_collection.find_one({"txn_id": txn_id})
         if existing_txn:
             logger.info(f"Duplicate TXN ID '{txn_id}' received. Skipping storage.")
             return
 
-        # Store the confirmed transaction in MongoDB
         transaction_data = {
             "txn_id": txn_id,
             "amount": amount,
-            "timestamp": datetime.utcnow(), # Store in UTC
+            "timestamp": datetime.utcnow(),
             "original_message": text,
-            "used_by_user_id": None, # Will be filled when a user claims it
+            "used_by_user_id": None,
             "used_at": None,
-            "status": "confirmed" # Initial status
+            "status": "confirmed"
         }
         await confirmed_upi_txns_collection.insert_one(transaction_data)
         logger.info(f"Stored confirmed UPI transaction: TXN ID={txn_id}, Amount={amount}")
@@ -403,36 +340,24 @@ async def process_group_message(client: Client, message: types.Message):
         logger.info(f"Could not parse TXN ID or Amount from message: {text}")
 
 async def main_subscription_bot_logic():
-    """
-    Main function to start the subscription bot and ensure database indexes.
-    This function will be run once by app.run().
-    """
     logger.info("Starting Subscription Bot and ensuring MongoDB indexes...")
     
-    # Ensure MongoDB indexes for faster lookups
     try:
-        # Attempt to drop the old 'id_1' index if it exists from previous runs
-        # This is a safe operation within a try-except block
         db.users.drop_index("id_1")
         logger.info("Dropped old 'id_1' index on users collection.")
     except Exception as e:
         logger.info(f"Could not drop 'id_1' index (might not exist or different name): {e}")
 
-    # Index for txn_id for quick lookup
     db.confirmed_upi_txns.create_index("txn_id", unique=True)
-    # Index for timestamp to filter recent transactions
     db.confirmed_upi_txns.create_index("timestamp")
-    # Index for used_by_user_id to check if a transaction is claimed
     db.confirmed_upi_txns.create_index("used_by_user_id")
     
-    # Index for user ID in users and tokens collection (now consistent with main bot)
     db.users.create_index("user_id", unique=True)
     db.tokens.create_index("user_id", unique=True)
     db.history.create_index("user_id", unique=True)
 
     logger.info("MongoDB indexes ensured.")
 
-    # Start the Pyrogram client
     await app.start()
     logger.info("Subscription Bot has connected to Telegram.")
 
@@ -443,14 +368,9 @@ async def main_subscription_bot_logic():
 if __name__ == "__main__":
     logger.info("Script started. Entering main execution block for Subscription Bot.")
     try:
-        # Pyrogram's app.run() is a blocking call that starts the bot and
-        # runs the provided coroutine (main_subscription_bot_logic) within its own event loop.
-        # It then handles long polling internally.
         app.run(main_subscription_bot_logic())
     except KeyboardInterrupt:
         logger.info("Subscription Bot stopped by KeyboardInterrupt (Ctrl+C). Shutting down...")
-        # Pyrogram's app.run() usually handles app.stop() on Ctrl+C.
-        # Ensure any custom cleanup is performed here if needed outside app.stop().
     except Exception as e:
         logger.critical(f"An unhandled error occurred during bot startup or main execution: {e}", exc_info=True)
     finally:
