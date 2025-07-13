@@ -32,7 +32,7 @@ class BotConfig:
     PAYMENT_MESSAGE_DELETE_DELAY = 600
 
     # Add an ADMIN_IDS list for debugging and future admin commands
-    ADMIN_IDS = [YOUR_TELEGRAM_USER_ID_HERE] # Replace with your actual Telegram User ID (integer)
+    ADMIN_IDS = [6612030110] # Replace with your actual Telegram User ID (integer)
 
 # --- MongoDB Connection Setup ---
 mongo_client = AsyncIOMotorClient(BotConfig.MONGO_URI)
