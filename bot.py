@@ -2,10 +2,18 @@ import os
 import re
 import asyncio
 from datetime import datetime, timedelta
+import logging # Import logging
 
 from pyrogram import Client, filters, types
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson.objectid import ObjectId # For potential future use with _id if needed
+
+# --- Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # --- Bot Configuration Class ---
 # This class holds all the essential configuration details for your bot.
@@ -27,7 +35,7 @@ class BotConfig:
     # This should ideally be a business UPI link or a payment gateway link for privacy.
     UPI_LINK = os.environ.get("UPI_LINK", "upi://pay?pa=you@upi&pn=YourName&mc=0000&tid=00000000000000&tr=YourRef&am=1.00")
     # Optional: URL to a QR code image. If not provided, only text instructions will be sent.
-    QR_CODE_IMAGE_URL = os.environ.get("QR_CODE_IMAGE_IMAGE_URL", "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR")
+    QR_CODE_IMAGE_URL = os.environ.get("QR_CODE_IMAGE_URL", "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR")
 
     # The ID of the private Telegram group where UPI SMS notifications are forwarded.
     # The bot must be an admin in this group with read message permissions.
@@ -69,7 +77,6 @@ async def get_user_stats(user_id: int):
     Fetches comprehensive statistics for a given user from MongoDB.
     Includes premium status, active tokens, referral count, saved video count, and video views.
     """
-    # *** COMPATIBILITY CHANGE: Using 'user_id' for users_collection ***
     user_data = await users_collection.find_one({"user_id": user_id})
     user_tokens = await tokens_collection.find_one({"user_id": user_id})
     user_history = await history_collection.find_one({"user_id": user_id})
@@ -90,9 +97,9 @@ async def get_user_stats(user_id: int):
             latest_expiry = max(token["expires_at"] for token in active_tokens)
             expires_at = latest_expiry.strftime("%Y-%m-%d %H:%M UTC")
 
-    referral_count = user_data.get("referral_count", 0) if user_data else 0 # Main bot uses 'referral_count'
-    saved_video_count = len(user_data.get("bookmarked_videos", [])) if user_data else 0 # Main bot uses 'bookmarked_videos'
-    video_views = user_history.get("views", 0) if user_history else 0 # Main bot uses 'views' in history
+    referral_count = user_data.get("referral_count", 0) if user_data else 0
+    saved_video_count = len(user_data.get("bookmarked_videos", [])) if user_data else 0
+    video_views = user_history.get("views", 0) if user_history else 0
 
     return {
         "is_premium": is_premium,
@@ -119,14 +126,14 @@ async def update_premium_status(user_id: int, duration_days: int):
 
     # Atomically update the tokens collection
     await tokens_collection.update_one(
-        {"user_id": user_id}, # *** COMPATIBILITY CHANGE: Using 'user_id' for tokens_collection ***
+        {"user_id": user_id},
         {"$push": {"tokens": token_data}},
         upsert=True
     )
 
     # Update user's last_premium_check_status in the users collection
     await users_collection.update_one(
-        {"user_id": user_id}, # *** COMPATIBILITY CHANGE: Using 'user_id' for users_collection ***
+        {"user_id": user_id},
         {"$set": {"last_premium_check_status": True}},
         upsert=True
     )
@@ -140,9 +147,9 @@ async def schedule_message_deletion(chat_id: int, message_id: int, delay: int):
     await asyncio.sleep(delay)
     try:
         await app.delete_messages(chat_id, message_id)
-        print(f"Deleted message {message_id} in chat {chat_id} after {delay} seconds.")
+        logger.info(f"Deleted message {message_id} in chat {chat_id} after {delay} seconds.")
     except Exception as e:
-        print(f"Could not delete message {message_id} in chat {chat_id}: {e}")
+        logger.error(f"Could not delete message {message_id} in chat {chat_id}: {e}")
 
 # --- Handlers for User Interaction (Private Chat) ---
 
@@ -212,7 +219,7 @@ async def send_payment_info(client: Client, message: types.Message, plan_type: s
                 parse_mode="markdown"
             )
         except Exception as e:
-            print(f"Error sending QR code image: {e}. Sending text only.")
+            logger.error(f"Error sending QR code image: {e}. Sending text only.")
             sent_message = await message.reply_text(payment_instructions, parse_mode="markdown")
     else:
         sent_message = await message.reply_text(payment_instructions, parse_mode="markdown")
@@ -249,7 +256,7 @@ async def handle_txn_id(client: Client, message: types.Message):
     """
     user_id = message.from_user.id
     txn_id = message.text.strip()
-    print(f"User {user_id} sent potential TXN ID: {txn_id}")
+    logger.info(f"User {user_id} sent potential TXN ID: {txn_id}")
 
     await message.reply_chat_action("typing")
 
@@ -318,7 +325,7 @@ async def handle_txn_id(client: Client, message: types.Message):
         f"Expires On: `{expires_at.strftime('%Y-%m-%d %H:%M UTC')}`\n\n"
         "Enjoy your premium features!"
     )
-    print(f"User {user_id} successfully granted {matched_plan} premium with TXN ID: {txn_id}")
+    logger.info(f"User {user_id} successfully granted {matched_plan} premium with TXN ID: {txn_id}")
 
 
 # --- Handler for Payment Confirmation (Group Chat Listener) ---
@@ -330,7 +337,7 @@ async def process_group_message(client: Client, message: types.Message):
     and stores confirmed transactions in MongoDB.
     """
     text = message.text
-    print(f"Received message in TXN Group {BotConfig.TXN_GROUP_ID}: {text[:100]}...") # Log first 100 chars
+    logger.info(f"Received message in TXN Group {BotConfig.TXN_GROUP_ID}: {text[:100]}...") # Log first 100 chars
 
     txn_id = None
     amount = None
@@ -377,7 +384,7 @@ async def process_group_message(client: Client, message: types.Message):
         # Check for duplicate transaction ID to avoid reprocessing same SMS
         existing_txn = await confirmed_upi_txns_collection.find_one({"txn_id": txn_id})
         if existing_txn:
-            print(f"Duplicate TXN ID '{txn_id}' received. Skipping storage.")
+            logger.info(f"Duplicate TXN ID '{txn_id}' received. Skipping storage.")
             return
 
         # Store the confirmed transaction in MongoDB
@@ -391,23 +398,25 @@ async def process_group_message(client: Client, message: types.Message):
             "status": "confirmed" # Initial status
         }
         await confirmed_upi_txns_collection.insert_one(transaction_data)
-        print(f"Stored confirmed UPI transaction: TXN ID={txn_id}, Amount={amount}")
+        logger.info(f"Stored confirmed UPI transaction: TXN ID={txn_id}, Amount={amount}")
     else:
-        print(f"Could not parse TXN ID or Amount from message: {text}")
+        logger.info(f"Could not parse TXN ID or Amount from message: {text}")
 
-# --- Main Execution Block ---
-if __name__ == "__main__":
-    print("Starting Subscription Bot...")
+async def main_subscription_bot_logic():
+    """
+    Main function to start the subscription bot and ensure database indexes.
+    This function will be run once by app.run().
+    """
+    logger.info("Starting Subscription Bot and ensuring MongoDB indexes...")
+    
     # Ensure MongoDB indexes for faster lookups
-    # *** COMPATIBILITY CHANGE: Using 'user_id' for users and tokens collections ***
-    # This aligns with your main bot's schema.
-
     try:
         # Attempt to drop the old 'id_1' index if it exists from previous runs
+        # This is a safe operation within a try-except block
         db.users.drop_index("id_1")
-        print("Dropped old 'id_1' index on users collection.")
+        logger.info("Dropped old 'id_1' index on users collection.")
     except Exception as e:
-        print(f"Could not drop 'id_1' index (might not exist or different name): {e}")
+        logger.info(f"Could not drop 'id_1' index (might not exist or different name): {e}")
 
     # Index for txn_id for quick lookup
     db.confirmed_upi_txns.create_index("txn_id", unique=True)
@@ -421,7 +430,29 @@ if __name__ == "__main__":
     db.tokens.create_index("user_id", unique=True)
     db.history.create_index("user_id", unique=True)
 
+    logger.info("MongoDB indexes ensured.")
 
-    app.run() # This starts the bot
-    print("Subscription Bot stopped.")
+    # Start the Pyrogram client
+    await app.start()
+    logger.info("Subscription Bot has connected to Telegram.")
+
+    # Keep the bot alive indefinitely
+    await asyncio.Event().wait()
+
+
+if __name__ == "__main__":
+    logger.info("Script started. Entering main execution block for Subscription Bot.")
+    try:
+        # Pyrogram's app.run() is a blocking call that starts the bot and
+        # runs the provided coroutine (main_subscription_bot_logic) within its own event loop.
+        # It then handles long polling internally.
+        app.run(main_subscription_bot_logic())
+    except KeyboardInterrupt:
+        logger.info("Subscription Bot stopped by KeyboardInterrupt (Ctrl+C). Shutting down...")
+        # Pyrogram's app.run() usually handles app.stop() on Ctrl+C.
+        # Ensure any custom cleanup is performed here if needed outside app.stop().
+    except Exception as e:
+        logger.critical(f"An unhandled error occurred during bot startup or main execution: {e}", exc_info=True)
+    finally:
+        logger.info("Subscription Bot application exiting.")
 
