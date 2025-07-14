@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 import pytz
 from pymongo import MongoClient
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -11,6 +11,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
     CallbackQueryHandler,
+    PreCheckoutQueryHandler, # Import PreCheckoutQueryHandler
 )
 import uuid
 import re
@@ -38,6 +39,7 @@ class BotConfig:
     # Payment details for each plan and method
     # IMPORTANT: Replace these with your actual dynamic links/QR codes for each amount and method
     # For demonstration, placeholders are used for QR codes and links.
+    # For Telegram Stars, the 'link' and 'qr_code' are not directly used as send_invoice handles it.
     PAYMENT_DETAILS = {
         69.0: {
             "upi": {
@@ -48,8 +50,10 @@ class BotConfig:
                 "link": "https://pay.binance.com/qr/YOUR_BINANCE_PAY_ID?amount=69&currency=INR", # Placeholder Binance link
                 "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 69 Binance
             },
+            # For Telegram Stars, the 'link' and 'qr_code' here are for display purposes only
+            # The actual invoice is generated via send_invoice
             "telegram_star": {
-                "link": "https://t.me/wallet/star/invoice?amount=69", # Placeholder Telegram Stars link
+                "link": "https://t.me/wallet/star/invoice?amount=69", # This is a generic link, actual one is dynamic
                 "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 69 Telegram Stars
             }
         },
@@ -63,7 +67,7 @@ class BotConfig:
                 "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199 Binance
             },
             "telegram_star": {
-                "link": "https://t.me/wallet/star/invoice?amount=199", # Placeholder Telegram Stars link
+                "link": "https://t.me/wallet/star/invoice?amount=199", # This is a generic link, actual one is dynamic
                 "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199 Telegram Stars
             }
         }
@@ -256,6 +260,46 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             await query.edit_message_text("There was a mismatch in your selected plan. Please start again with /start.")
             return
 
+        if selected_method == "telegram_star":
+            # For Telegram Stars, we use send_invoice
+            plan_name = f"₹{int(selected_amount)} Plan"
+            plan_description = f"Subscription for {config.SUBSCRIPTION_PLANS.get(selected_amount)} days."
+            # The payload should be unique for each transaction to identify it later
+            payload = f"stars_payment_{user_id}_{int(selected_amount)}_{uuid.uuid4()}" 
+
+            # IMPORTANT: Determine the correct amount in Stars (XTR)
+            # Telegram Stars are typically 1 Star = 1 USD equivalent, but the exact conversion
+            # for your region might vary. You need to determine how many Stars correspond to your INR amount.
+            # For simplicity, we'll assume 1 INR = 1 Star for this example.
+            # In a real scenario, you'd convert INR to XTR based on current rates or fixed prices.
+            # Telegram Stars amounts are in the smallest unit (e.g., 100 for 1 Star).
+            # So, if your plan is 69 INR, and you decide 1 INR = 1 Star, then 69 Stars.
+            # If 1 Star = 80 INR, then 69/80 = 0.8625 Stars, so you'd need to adjust your pricing.
+            # For this example, let's assume 1 Star = 1 INR for simplicity in the code.
+            # So, 69 INR becomes 6900 units (69 Stars).
+            stars_amount_in_smallest_unit = int(selected_amount * 100) # Assuming 1 Star = 100 units (e.g., cents/paise equivalent)
+
+            prices = [LabeledPrice(label=plan_name, amount=stars_amount_in_smallest_unit)]
+
+            try:
+                await context.bot.send_invoice(
+                    chat_id=user_id,
+                    title=plan_name,
+                    description=plan_description,
+                    payload=payload,
+                    provider_token="", # Leave empty for Telegram Stars
+                    currency="XTR", # Telegram Stars currency
+                    prices=prices,
+                    start_parameter="stars_purchase", # Optional: for deep linking
+                )
+                await query.edit_message_text(f"Please complete your ₹{int(selected_amount)} payment using Telegram Stars via the invoice sent to you.")
+                logger.info(f"Sent Telegram Stars invoice to user {user_id} for {selected_amount} INR equivalent.")
+            except Exception as e:
+                logger.error(f"Failed to send Telegram Stars invoice to user {user_id}: {e}", exc_info=True)
+                await query.edit_message_text("❌ Failed to create Telegram Stars invoice. Please try again later or choose another payment method.")
+            return # Exit after handling Stars payment
+
+        # For UPI and Binance, continue with existing logic
         payment_info = config.PAYMENT_DETAILS.get(selected_amount, {}).get(selected_method)
 
         if not payment_info:
@@ -450,6 +494,100 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         logger.debug(f"No TXN ID or Amount found in group message: {message_text}")
 
+async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles pre-checkout queries from Telegram Stars payments."""
+    query = update.pre_checkout_query
+    user_id = query.from_user.id
+    payload = query.invoice_payload
+
+    logger.info(f"Received pre_checkout_query from {user_id} with payload: {payload}")
+
+    # You can perform final checks here before confirming the payment
+    # For example, verify the payload structure, ensure the user is still active, etc.
+    if not payload.startswith("stars_payment_"):
+        await query.answer(ok=False, error_message="Invalid payment request payload.")
+        logger.warning(f"Invalid payload in pre_checkout_query: {payload}")
+        return
+
+    # All checks passed, confirm the payment
+    await query.answer(ok=True)
+    logger.info(f"Pre-checkout query answered successfully for {user_id}.")
+
+async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles successful Telegram Stars payments."""
+    message = update.message
+    successful_payment = message.successful_payment
+    user_id = message.from_user.id
+    username = message.from_user.username if message.from_user.username else message.from_user.first_name
+    payload = successful_payment.invoice_payload
+
+    logger.info(f"Successful payment received from {user_id} for payload: {payload}")
+    logger.info(f"Payment details: Total amount: {successful_payment.total_amount}, Currency: {successful_payment.currency}")
+
+    # Parse the payload to get the original amount and user_id
+    try:
+        # Expected payload format: "stars_payment_<user_id>_<amount_in_inr>_<uuid>"
+        parts = payload.split("_")
+        if len(parts) >= 4 and parts[0] == "stars" and parts[1] == "payment":
+            original_user_id = int(parts[2])
+            paid_amount_inr = float(parts[3]) # This is the INR equivalent you expected
+        else:
+            raise ValueError("Unexpected payload format for successful payment")
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing successful payment payload '{payload}': {e}", exc_info=True)
+        await message.reply_text("❌ An error occurred while processing your payment. Please contact support.")
+        return
+
+    # Optional: Verify user_id matches and amount is as expected
+    if original_user_id != user_id:
+        logger.warning(f"Mismatch in user ID for successful Stars payment. Expected {original_user_id}, got {user_id}.")
+        # You might want to log this and potentially alert an admin.
+        await message.reply_text("There was an issue verifying your payment. Please contact support with your Telegram Stars payment details.")
+        return
+
+    # Convert the received total_amount (in Stars, smallest unit) back to your expected INR equivalent
+    # This conversion logic depends on how you defined your prices when sending the invoice.
+    # If you used `int(selected_amount * 100)` for stars_amount_in_smallest_unit, then:
+    expected_stars_amount_in_smallest_unit = int(paid_amount_inr * 100) 
+    
+    if successful_payment.total_amount < expected_stars_amount_in_smallest_unit:
+        await message.reply_text(
+            f"❌ Your Telegram Stars payment of {successful_payment.total_amount / 100:.2f} Stars was less than the required amount for the ₹{int(paid_amount_inr)} plan. Please contact support."
+        )
+        logger.warning(f"Stars payment too low. Received {successful_payment.total_amount}, expected {expected_stars_amount_in_smallest_unit}.")
+        return
+
+    duration_days = config.SUBSCRIPTION_PLANS.get(paid_amount_inr)
+    if not duration_days:
+        logger.error(f"No duration found for paid amount {paid_amount_inr} from Stars payment.")
+        await message.reply_text("❌ An internal error occurred after payment. Please contact support.")
+        return
+
+    # Update user's premium status
+    expires_at_ist = await update_premium_status(user_id, username, duration_days)
+
+    if expires_at_ist:
+        # For Stars, there's no "TXN ID" to mark as used in confirmed_upi_txns.
+        # You might want a separate collection for Stars transactions if you need to track them.
+        # For now, we just grant access.
+        
+        await message.reply_text(
+            f"Dear {username}, 🎉\n\n"
+            f"✅ Your Telegram Stars payment has been confirmed.\n"
+            f"🗓️ Premium access granted for {duration_days} days!\n"
+            f"Expires on: {expires_at_ist.strftime('%d %B %Y %H:%M %Z')}.\n\n"
+            "You can now enjoy premium content with the File-Sharing Bot!"
+        )
+        logger.info(f"Premium access granted for user {user_id} for {duration_days} days via Telegram Stars.")
+        # Clear the selected plan from user_data after successful payment
+        if 'selected_plan_amount' in context.user_data:
+            del context.user_data['selected_plan_amount']
+    else:
+        await message.reply_text(
+            "An error occurred while updating your premium status. Please try again later or contact support."
+        )
+        logger.error(f"Failed to update premium status for user {user_id} after Stars payment.")
+
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error and send a message to the user."""
@@ -479,6 +617,10 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_txn_id))
     application.add_handler(CallbackQueryHandler(button_callback_handler)) # Handles both plan and payment method selection
+
+    # Handlers for Telegram Stars payments
+    application.add_handler(PreCheckoutQueryHandler(pre_checkout_callback))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
 
     # Register handler for messages coming from the specific TXN group
     application.add_handler(MessageHandler(filters.Chat(config.TXN_GROUP_ID) & filters.TEXT & ~filters.COMMAND, chat_id_handler))
