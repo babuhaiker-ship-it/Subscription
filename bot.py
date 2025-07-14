@@ -10,10 +10,10 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    CallbackQueryHandler, # Import CallbackQueryHandler
+    CallbackQueryHandler,
 )
 import uuid
-import re # Import regex module
+import re
 
 # --- Configuration ---
 class BotConfig:
@@ -35,16 +35,38 @@ class BotConfig:
         199.0: 30  # ₹199 for 30 days (Monthly)
     }
 
-    # UPI Links and QR Code Image URLs for each plan amount
-    # IMPORTANT: Replace these with your actual dynamic links/QR codes for each amount
-    # For demonstration, placeholders are used for QR codes.
-    UPI_LINKS = {
-        69.0: "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=69&cu=INR", # UPI link for 69
-        199.0: "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=199&cu=INR" # UPI link for 199
-    }
-    QR_CODE_IMAGE_URLS = {
-        69.0: "https://i.postimg.cc/28W3hCmz/Image.jpg", # Placeholder QR for 69
-        199.0: "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199
+    # Payment details for each plan and method
+    # IMPORTANT: Replace these with your actual dynamic links/QR codes for each amount and method
+    # For demonstration, placeholders are used for QR codes and links.
+    PAYMENT_DETAILS = {
+        69.0: {
+            "upi": {
+                "link": "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=69&cu=INR",
+                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 69 UPI
+            },
+            "binance": {
+                "link": "https://pay.binance.com/qr/YOUR_BINANCE_PAY_ID?amount=69&currency=INR", # Placeholder Binance link
+                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 69 Binance
+            },
+            "telegram_star": {
+                "link": "https://t.me/wallet/star/invoice?amount=69", # Placeholder Telegram Stars link
+                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 69 Telegram Stars
+            }
+        },
+        199.0: {
+            "upi": {
+                "link": "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=199&cu=INR",
+                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199 UPI
+            },
+            "binance": {
+                "link": "https://pay.binance.com/qr/YOUR_BINANCE_PAY_ID?amount=199&currency=INR", # Placeholder Binance link
+                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199 Binance
+            },
+            "telegram_star": {
+                "link": "https://t.me/wallet/star/invoice?amount=199", # Placeholder Telegram Stars link
+                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199 Telegram Stars
+            }
+        }
     }
 
     # ID of the Telegram Group where UPI SMS notifications are forwarded
@@ -172,7 +194,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(welcome_message, reply_markup=reply_markup)
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles inline button presses for plan selection."""
+    """Handles inline button presses for plan selection and payment method selection."""
     query = update.callback_query
     await query.answer() # Acknowledge the callback query
 
@@ -196,31 +218,64 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             logger.warning(f"User {user_id} selected an invalid plan amount: {selected_amount}")
             return
 
-        # Store the selected amount in user_data for later verification
+        # Store the selected amount in user_data for later use
         context.user_data['selected_plan_amount'] = selected_amount
         logger.info(f"User {user_id} selected plan for amount: {selected_amount}")
 
-        upi_link = config.UPI_LINKS.get(selected_amount)
-        qr_code_url = config.QR_CODE_IMAGE_URLS.get(selected_amount)
-        
-        if not upi_link:
-            await query.edit_message_text("Payment link not available for this plan. Please contact support.")
-            logger.error(f"UPI link missing for amount: {selected_amount}")
+        # Offer payment options
+        payment_options_keyboard = [
+            [InlineKeyboardButton("💳 UPI", callback_data=f"paymethod_{selected_amount}_upi")],
+            [InlineKeyboardButton("💰 Binance", callback_data=f"paymethod_{selected_amount}_binance")],
+            [InlineKeyboardButton("⭐ Telegram Stars", callback_data=f"paymethod_{selected_amount}_telegram_star")],
+        ]
+        reply_markup = InlineKeyboardMarkup(payment_options_keyboard)
+
+        await query.edit_message_text(
+            f"You have selected the ₹{int(selected_amount)} plan. Please choose your preferred payment method:",
+            reply_markup=reply_markup
+        )
+
+    elif callback_data.startswith("paymethod_"):
+        parts = callback_data.split("_")
+        if len(parts) < 3:
+            logger.error(f"Invalid payment method callback data: {callback_data}")
+            await query.edit_message_text("An error occurred. Please try again or contact support.")
             return
 
+        try:
+            selected_amount = float(parts[1])
+            selected_method = parts[2]
+        except (ValueError, IndexError):
+            logger.error(f"Error parsing amount or method from callback data: {callback_data}")
+            await query.edit_message_text("An error occurred. Please try again or contact support.")
+            return
+
+        # Verify the selected amount matches the one stored earlier (optional, but good for consistency)
+        if context.user_data.get('selected_plan_amount') != selected_amount:
+            logger.warning(f"Mismatch in selected plan amount. User data: {context.user_data.get('selected_plan_amount')}, Callback: {selected_amount}")
+            await query.edit_message_text("There was a mismatch in your selected plan. Please start again with /start.")
+            return
+
+        payment_info = config.PAYMENT_DETAILS.get(selected_amount, {}).get(selected_method)
+
+        if not payment_info:
+            await query.edit_message_text(f"Payment details for {selected_method} not available for ₹{int(selected_amount)}. Please choose another method or contact support.")
+            logger.error(f"Payment details missing for amount {selected_amount} and method {selected_method}")
+            return
+
+        payment_link = payment_info.get("link")
+        qr_code_url = payment_info.get("qr_code")
+
         payment_message = (
-            f"You have selected the ₹{int(selected_amount)} plan.\n\n"
-            "Scan the QR or click the UPI link below 👇\n\n"
-            f"🔗 {upi_link}\n\n"
+            f"You have selected the ₹{int(selected_amount)} plan via {selected_method.replace('_', ' ').title()}.\n\n"
+            "Scan the QR or click the link below 👇\n\n"
+            f"🔗 {payment_link}\n\n"
             "After you have sent the payment, send your TXN ID to confirm.\n"
             "Example: `TXN ID 264861XXXXX`"
         )
 
         if qr_code_url:
-            # Using reply_photo on the original message to send a new message with photo
             await query.message.reply_photo(photo=qr_code_url, caption=payment_message, parse_mode="Markdown")
-            # Optionally delete the original message with buttons if desired
-            # await query.message.delete() 
         else:
             await query.edit_message_text(payment_message, parse_mode="Markdown")
 
@@ -257,10 +312,6 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    # No need to check 'if not confirmed_txn_collection:' here.
-    # If it's None, the script should have exited during initialization.
-    # If there's a problem with the DB connection *after* initialization,
-    # the find_one call will raise an error, which the error_handler will catch.
     try:
         confirmed_payment = confirmed_txn_collection.find_one({
             "txn_id": txn_id,
@@ -427,7 +478,7 @@ def main() -> None:
     # Register handlers for private chat with the user
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_txn_id))
-    application.add_handler(CallbackQueryHandler(button_callback_handler)) # New handler for inline buttons
+    application.add_handler(CallbackQueryHandler(button_callback_handler)) # Handles both plan and payment method selection
 
     # Register handler for messages coming from the specific TXN group
     application.add_handler(MessageHandler(filters.Chat(config.TXN_GROUP_ID) & filters.TEXT & ~filters.COMMAND, chat_id_handler))
