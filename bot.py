@@ -11,7 +11,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
     CallbackQueryHandler,
-    PreCheckoutQueryHandler,
+    PreCheckoutQueryHandler, # Import PreCheckoutQueryHandler
 )
 import uuid
 import re
@@ -39,36 +39,36 @@ class BotConfig:
     # Payment details for each plan and method
     # IMPORTANT: Replace these with your actual dynamic links/QR codes for each amount and method
     # For demonstration, placeholders are used for QR codes and links.
-    # For Telegram Stars, the 'link' and 'qr_code' here are not directly used as send_invoice handles it.
+    # For Telegram Stars, the 'link' and 'qr_code' are not directly used as send_invoice handles it.
     PAYMENT_DETAILS = {
         69.0: {
             "upi": {
                 "link": "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=69&cu=INR",
-                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 69 UPI
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 69 UPI
             },
             "binance": {
                 "link": "https://pay.binance.com/qr/YOUR_BINANCE_PAY_ID?amount=69&currency=INR", # Placeholder Binance link
-                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 69 Binance
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 69 Binance
             },
             # For Telegram Stars, the 'link' and 'qr_code' here are for display purposes only
             # The actual invoice is generated via send_invoice
-            "telegram_star": { # Ensure this key is exactly "telegram_star"
+            "telegram_star": {
                 "link": "https://t.me/wallet/star/invoice?amount=69", # This is a generic link, actual one is dynamic
-                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 69 Telegram Stars
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 69 Telegram Stars
             }
         },
         199.0: {
             "upi": {
                 "link": "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=199&cu=INR",
-                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199 UPI
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 199 UPI
             },
             "binance": {
                 "link": "https://pay.binance.com/qr/YOUR_BINANCE_PAY_ID?amount=199&currency=INR", # Placeholder Binance link
-                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199 Binance
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 199 Binance
             },
-            "telegram_star": { # Ensure this key is exactly "telegram_star"
+            "telegram_star": {
                 "link": "https://t.me/wallet/star/invoice?amount=199", # This is a generic link, actual one is dynamic
-                "qr_code": "https://i.postimg.cc/28W3hCmz/Image.jpg" # Placeholder QR for 199 Telegram Stars
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 199 Telegram Stars
             }
         }
     }
@@ -86,7 +86,7 @@ except Exception as e:
 
 # --- Logging Setup ---
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=INFO # Changed to INFO for better debug visibility
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -230,7 +230,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         payment_options_keyboard = [
             [InlineKeyboardButton("💳 UPI", callback_data=f"paymethod_{selected_amount}_upi")],
             [InlineKeyboardButton("💰 Binance", callback_data=f"paymethod_{selected_amount}_binance")],
-            [InlineKeyboardButton("⭐ Telegram Stars", callback_data=f"paymethod_{selected_amount}_telegram_star")], # Ensure this callback_data is correct
+            [InlineKeyboardButton("⭐ Telegram Stars", callback_data=f"paymethod_{selected_amount}_telegram_star")],
         ]
         reply_markup = InlineKeyboardMarkup(payment_options_keyboard)
 
@@ -253,8 +253,6 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             logger.error(f"Error parsing amount or method from callback data: {callback_data}")
             await query.edit_message_text("An error occurred. Please try again or contact support.")
             return
-
-        logger.debug(f"DEBUG: Selected method from callback: '{selected_method}' for amount: {selected_amount}") # Debug log
 
         # Verify the selected amount matches the one stored earlier (optional, but good for consistency)
         if context.user_data.get('selected_plan_amount') != selected_amount:
@@ -299,14 +297,12 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             except Exception as e:
                 logger.error(f"Failed to send Telegram Stars invoice to user {user_id}: {e}", exc_info=True)
                 await query.edit_message_text("❌ Failed to create Telegram Stars invoice. Please try again later or choose another payment method.")
-            return # This return ensures the code exits here for Telegram Stars payments
+            return # Exit after handling Stars payment
 
         # For UPI and Binance, continue with existing logic
-        # This block will ONLY be reached if selected_method is NOT "telegram_star"
         payment_info = config.PAYMENT_DETAILS.get(selected_amount, {}).get(selected_method)
 
         if not payment_info:
-            # This error message will now only show if payment_info is genuinely missing for UPI/Binance
             await query.edit_message_text(f"Payment details for {selected_method} not available for ₹{int(selected_amount)}. Please choose another method or contact support.")
             logger.error(f"Payment details missing for amount {selected_amount} and method {selected_method}")
             return
@@ -639,4 +635,3 @@ if __name__ == "__main__":
     if client:
         client.close()
         logger.info("MongoDB connection closed.")
-
