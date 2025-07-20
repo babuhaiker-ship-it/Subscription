@@ -11,7 +11,6 @@ from telegram.ext import (
     filters,
     ContextTypes,
     CallbackQueryHandler,
-    PreCheckoutQueryHandler, # Import PreCheckoutQueryHandler
 )
 import uuid
 import re
@@ -32,55 +31,36 @@ class BotConfig:
 
     # Define subscription plans and their corresponding durations in days
     SUBSCRIPTION_PLANS = {
-        69.0: 7,   # ₹69 for 7 days (Weekly Trial)
-        199.0: 30  # ₹199 for 30 days (Monthly)
+        199.0: 30,  # ₹199 for 30 days (Monthly)
+        399.0: 90   # ₹399 for 90 days (3 Months)
     }
 
     # Payment details for each plan and method
-    # IMPORTANT: Replace these with your actual dynamic links/QR codes for each amount and method
-    # For demonstration, placeholders are used for QR codes and links.
-    # For Telegram Stars, the 'link' and 'qr_code' are not directly used as send_invoice handles it.
     PAYMENT_DETAILS = {
-        69.0: {
-            "upi": {
-                "link": "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=69&cu=INR",
-                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 69 UPI
-            },
-            "binance": {
-                "link": "https://pay.binance.com/qr/YOUR_BINANCE_PAY_ID?amount=69&currency=INR", # Placeholder Binance link
-                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 69 Binance
-            },
-            # For Telegram Stars, the 'link' and 'qr_code' here are for display purposes only
-            # The actual invoice is generated via send_invoice
-            "telegram_star": {
-                "link": "https://t.me/wallet/star/invoice?amount=69", # This is a generic link, actual one is dynamic
-                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 69 Telegram Stars
-            }
-        },
         199.0: {
             "upi": {
                 "link": "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=199&cu=INR",
                 "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 199 UPI
-            },
-            "binance": {
-                "link": "https://pay.binance.com/qr/YOUR_BINANCE_PAY_ID?amount=199&currency=INR", # Placeholder Binance link
-                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 199 Binance
-            },
-            "telegram_star": {
-                "link": "https://t.me/wallet/star/invoice?amount=199", # This is a generic link, actual one is dynamic
-                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 199 Telegram Stars
+            }
+        },
+        399.0: {
+            "upi": {
+                "link": "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=399&cu=INR",
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 399 UPI
             }
         }
     }
 
     # ID of the Telegram Group where UPI SMS notifications are forwarded
-    # The bot MUST be an admin in this group with 'Read All Messages' permission.
     TXN_GROUP_ID = -1002685844988 # REPLACE WITH YOUR ACTUAL UPI SMS FORWARDING GROUP CHAT ID (e.g., -100xxxxxxxxxx)
+
+    # Verification Link for the 199/- plan
+    VERIFICATION_LINK = "https://example.com/your_verification_link_here" # REPLACE WITH YOUR ACTUAL VERIFICATION LINK
 
 try:
     config = BotConfig()
-    if not all([config.BOT_TOKEN, config.MONGO_URI, config.TXN_GROUP_ID]):
-        raise ValueError("One or more essential configuration variables are not set. Please check BOT_TOKEN, MONGO_URI, TXN_GROUP_ID.")
+    if not all([config.BOT_TOKEN, config.MONGO_URI, config.TXN_GROUP_ID, config.VERIFICATION_LINK]):
+        raise ValueError("One or more essential configuration variables are not set. Please check BOT_TOKEN, MONGO_URI, TXN_GROUP_ID, VERIFICATION_LINK.")
 except Exception as e:
     raise RuntimeError(f"Failed to load bot configuration: {e}")
 
@@ -182,20 +162,212 @@ async def update_premium_status(user_id: int, username: str, duration_days: int)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message and offers subscription plans."""
     user = update.effective_user
+    # Nyraa: "Heyyy! ✨ Premium chahiye kya, cutie? 😉💖"
+    await update.message.reply_text("Heyyy! ✨ Premium chahiye kya, cutie? 😉💖")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles various user messages based on keywords and context."""
+    user_text = update.message.text.lower().strip()
+    user = update.effective_user
+    user_id = user.id
     username = user.username if user.username else user.first_name
 
-    welcome_message = (
-        f"Dear {username}, this is Nyraa Exclusive. Here you can buy tokens. "
-        "Please select a plan to continue."
-    )
-
-    keyboard = [
-        [InlineKeyboardButton("₹69 Weekly Trial", callback_data="plan_69")],
-        [InlineKeyboardButton("₹199 Monthly", callback_data="plan_199")],
+    # --- Affirmative Responses (Leading to Plan Options) ---
+    affirmative_keywords = [
+        "ha", "h", "han", "hanji", "haan", "yes", "y", "yup", "sure", "bilkul",
+        "theek hai", "ok", "okay", "hmm", "acha", "ji", "batao", "bolo", "chahiye",
+        "yes please", "interested", "mujhe lena hai", "buy karna hai", "kahan se milega"
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    if any(keyword in user_text for keyword in affirmative_keywords):
+        # Nyraa: "Aww, cool! 🥳 So, 199/- monthly ya 399/- for 3 months? Kon sa pasand aaya? 🤔💖"
+        keyboard = [
+            [InlineKeyboardButton("₹199 Monthly", callback_data="plan_199")],
+            [InlineKeyboardButton("₹399 for 3 Months", callback_data="plan_399")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Aww, cool! 🥳 So, 199/- monthly ya 399/- for 3 months? Kon sa pasand aaya? 🤔💖",
+            reply_markup=reply_markup
+        )
+        return
 
-    await update.message.reply_text(welcome_message, reply_markup=reply_markup)
+    # --- User Inquires about Premium/Plans (Before Choosing) ---
+    # If the User Asks "Kya Hai Premium?" or "Benefits?"
+    premium_info_keywords = ["kya hai premium", "benefits", "what's included", "why premium", "premium mein kya hai", "features"]
+    if any(keyword in user_text for keyword in premium_info_keywords):
+        # Nyraa: "Premium mein na, bohot saare exclusive perks milenge! 🤩 Jaise, early access, no ads, special content, aur bhi bohot kuch! Interested ho kya? 😉💖"
+        await update.message.reply_text("Premium mein na, bohot saare exclusive perks milenge! 🤩 Jaise, early access, no ads, special content, aur bhi bohot kuch! Interested ho kya? 😉💖")
+        return
+
+    # If the User Asks About the Process/How to Subscribe
+    process_inquiry_keywords = ["kaise lein", "how to subscribe", "process kya hai", "buy karna hai", "mujhe lena hai", "kahan se milega", "kya karna padega"]
+    if any(keyword in user_text for keyword in process_inquiry_keywords):
+        # Nyraa: "Aww, awesome! 🤩 Toh, pehle batao na, 199/- monthly ya 399/- for 3 months? Kon sa chahiye? Uske baad main tumhe payment details bhejungi! 😉✨"
+        keyboard = [
+            [InlineKeyboardButton("₹199 Monthly", callback_data="plan_199")],
+            [InlineKeyboardButton("₹399 for 3 Months", callback_data="plan_399")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Aww, awesome! 🤩 Toh, pehle batao na, 199/- monthly ya 399/- for 3 months? Kon sa chahiye? Uske baad main tumhe payment details bhejungi! 😉✨",
+            reply_markup=reply_markup
+        )
+        return
+
+    # If the User Asks About Offers/Discounts
+    offer_inquiry_keywords = ["offer hai", "discount", "sasta nahi hoga", "kuch kam hoga", "price kam hoga"]
+    if any(keyword in user_text for keyword in offer_inquiry_keywords):
+        # Nyraa: "Abhi toh yahi best offers hain, cutie! 🥰 Par trust me, value for money hai! Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! 😉💖"
+        keyboard = [
+            [InlineKeyboardButton("₹199 Monthly", callback_data="plan_199")],
+            [InlineKeyboardButton("₹399 for 3 Months", callback_data="plan_399")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Abhi toh yahi best offers hain, cutie! 🥰 Par trust me, value for money hai! Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! 😉💖",
+            reply_markup=reply_markup
+        )
+        return
+
+    # If the User Asks for a Free Trial
+    free_trial_keywords = ["free trial", "try for free", "demo", "muft mein milega"]
+    if any(keyword in user_text for keyword in free_trial_keywords):
+        # Nyraa: "Aww, sorry, cutie! 🥺 Abhi koi free trial nahi hai. Par premium ke benefits itne mast hain ki tumko bilkul regret nahi hoga! 😉 Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! ✨💖"
+        keyboard = [
+            [InlineKeyboardButton("₹199 Monthly", callback_data="plan_199")],
+            [InlineKeyboardButton("₹399 for 3 Months", callback_data="plan_399")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Aww, sorry, cutie! 🥺 Abhi koi free trial nahi hai. Par premium ke benefits itne mast hain ki tumko bilkul regret nahi hoga! 😉 Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! ✨💖",
+            reply_markup=reply_markup
+        )
+        return
+
+    # --- After Plan Selection (What Happens Next) ---
+    # If the User Chooses 199/- Monthly (With Verification)
+    # This part is handled by the callback_query_handler after button press.
+    # The message handler will only catch if they type it out.
+    if any(keyword in user_text for keyword in ["199", "monthly", "pehla wala", "first one", "single month", "ek mahina", "1 month"]):
+        context.user_data['selected_plan_amount'] = 199.0
+        # Nyraa: "Okay, 199/- monthly! ✅ Par wait, ek chhota sa step hai! 🤫 Pehle verify kar lo ki tum human ho, okay? Is link pe click karo: [Your Verification Link Here] ✨ Jaise hi complete hoga, main aage ki details bhejungi, promise! 😉💖"
+        await update.message.reply_text(f"Okay, 199/- monthly! ✅ Par wait, ek chhota sa step hai! 🤫 Pehle verify kar lo ki tum human ho, okay? Is link pe click karo: {config.VERIFICATION_LINK} ✨ Jaise hi complete hoga, main aage ki details bhejungi, promise! 😉💖")
+        # For demonstration, directly ask for payment method after this.
+        # In a real bot, you'd wait for a signal from your verification system.
+        payment_options_keyboard = [
+            [InlineKeyboardButton("💳 UPI", callback_data=f"paymethod_{199.0}_upi")],
+        ]
+        reply_markup = InlineKeyboardMarkup(payment_options_keyboard)
+        await update.message.reply_text(
+            "Yayyy! Verification done! 🎉 Ab batao, payment kisse karoge? QR ya UPI ID? 😉💖",
+            reply_markup=reply_markup
+        )
+        return
+
+    # If the User Chooses 399/- for 3 Months
+    if any(keyword in user_text for keyword in ["399", "3 months", "teen mahine", "doosra wala", "second one", "long term", "3 mahine wala"]):
+        context.user_data['selected_plan_amount'] = 399.0
+        # Nyraa: "Smart choice, cutie! 399/- for 3 months it is! 🥳 Ab main tumhe payment link send kar rahi hoon. Jaise hi payment ho jaayegi na, tumhara premium access unlock ho jaayega! Let's go! 🚀💖"
+        # Offer payment options directly for 399 plan
+        payment_options_keyboard = [
+            [InlineKeyboardButton("💳 UPI", callback_data=f"paymethod_{399.0}_upi")],
+        ]
+        reply_markup = InlineKeyboardMarkup(payment_options_keyboard)
+        await update.message.reply_text(
+            f"Smart choice, cutie! 399/- for 3 months it is! 🥳 Ab main tumhe payment details bhejungi. Please choose your preferred payment method:",
+            reply_markup=reply_markup
+        )
+        return
+
+    # If the User Asks for More Payment Options (After Verification) - This context is hard to determine from just text.
+    # This response is better placed within the `button_callback_handler` after a plan is selected and payment method is asked.
+    # For now, if they type it generally:
+    payment_options_keywords = ["aur options hai", "binance", "crypto", "card", "net banking", "wallet"]
+    if any(keyword in user_text for keyword in payment_options_keywords):
+        # Nyraa: "Aww, filhal toh itne hi options available hain, cutie! 😅 Ek baar support bot mein poochh kar dekho na, kya pata wahaan admin aur options de de! 😉💖"
+        await update.message.reply_text("Aww, filhal toh itne hi options available hain, cutie! 😅 Ek baar support bot mein poochh kar dekho na, kya pata wahaan admin aur options de de! 😉💖")
+        return
+
+    # If the User Asks About the Verification Link Specifically
+    verification_link_keywords = ["ye link kya hai", "why verification", "is it safe", "link pe kya karna hai", "ye kaisa step hai"]
+    if any(keyword in user_text for keyword in verification_link_keywords):
+        # Nyraa: "Aww, don't worry, it's totally safe! 😊 Ye bas ek chhota sa human verification step hai, taaki hum confirm kar sakein ki tum bot nahi ho! 😉 Link pe click karke simple instructions follow karo, bas! Easy peasy! ✨💖"
+        await update.message.reply_text("Aww, don't worry, it's totally safe! 😊 Ye bas ek chhota sa human verification step hai, taaki hum confirm kar sakein ki tum bot nahi ho! 😉 Link pe click karke simple instructions follow karo, bas! Easy peasy! ✨💖")
+        return
+
+    # If the User is Unclear After Plan Selection
+    unclear_plan_keywords = ["kya karu", "kaise", "batao", "idk", "which one", "you tell"]
+    if any(keyword in user_text for keyword in unclear_plan_keywords):
+        # Nyraa: "Aww, confusion ho rahi hai? 😅 Koi nahi, sweetheart! Bas type kar do '199' monthly ke liye, ya '399' 3 months ke liye. Easy peasy! 😉💖"
+        await update.message.reply_text("Aww, confusion ho rahi hai? 😅 Koi nahi, sweetheart! Bas type kar do '199' monthly ke liye, ya '399' 3 months ke liye. Easy peasy! 😉💖")
+        return
+
+    # If the User Asks About Payment Methods (After Initial Plan Selection, before verification)
+    payment_method_inquiry_keywords = ["kaise pay karu", "payment options", "UPI hai", "card se hoga", "net banking"]
+    if any(keyword in user_text for keyword in payment_method_inquiry_keywords):
+        # Nyraa: "Payment ke liye hum saare popular options support karte hain, jaise UPI, Net Banking, aur Cards! 💳 Don't worry, main tumhe secure payment link bhejungi jisme saare options honge! It's super easy! 😉💖"
+        # Adjusted response since only UPI is available now
+        await update.message.reply_text("Payment ke liye hum sirf UPI support karte hain! 💳 Don't worry, main tumhe secure UPI QR aur ID bhejungi! It's super easy! 😉💖")
+        return
+
+    # --- Other Scenarios ---
+    # If the User Says "No" or "Nahi"
+    negative_keywords = ["no", "nahi", "na", "not now", "rehne do", "abhi nahi"]
+    if any(keyword in user_text for keyword in negative_keywords):
+        # Nyraa: "Aww, koi baat nahi, cutie! 🥺 Jab mann kare, tab aa jaana! Main yahin milungi! 🤗💖"
+        await update.message.reply_text("Aww, koi baat nahi, cutie! 🥺 Jab mann kare, tab aa jaana! Main yahin milungi! 🤗💖")
+        return
+
+    # If the User Asks for More Information or Help (General)
+    general_help_keywords = ["help", "info", "details", "kya chal raha hai"]
+    if any(keyword in user_text for keyword in general_help_keywords):
+        # Nyraa: "Heyyy, thoda aur clear karoge? 🧐 Kya jaanna chahte ho, sweetheart? Main yahi hoon help karne ke liye! 😊💖"
+        await update.message.reply_text("Heyyy, thoda aur clear karoge? 🧐 Kya jaanna chahte ho, sweetheart? Main yahi hoon help karne ke liye! 😊💖")
+        return
+
+    # If the User Asks About Cancellation/Refunds
+    cancel_refund_keywords = ["cancel kaise karein", "refund milega", "subscription kaise band karein", "paise wapas milenge"]
+    if any(keyword in user_text for keyword in cancel_refund_keywords):
+        # Nyraa: "Subscription cancel karne ke liye ya refund related queries ke liye, please hamari support team se contact karo na. Wo tumhari puri help karenge! 😊💖"
+        await update.message.reply_text("Subscription cancel karne ke liye ya refund related queries ke liye, please hamari support team se contact karo na. Wo tumhari puri help karenge! 😊💖")
+        return
+
+    # If the User Reports a Technical Issue
+    technical_issue_keywords = ["error aa raha hai", "not working", "problem ho rahi hai", "issue hai"]
+    if any(keyword in user_text for keyword in technical_issue_keywords):
+        # Nyraa: "Oh nooo! 😟 Kya problem ho rahi hai, cutie? Thoda aur detail mein bataoge? Main help karne ki puri koshish karungi, ya phir tumhe support team ke paas guide karungi! 🛠️💖"
+        await update.message.reply_text("Oh nooo! 😟 Kya problem ho rahi hai, cutie? Thoda aur detail mein bataoge? Main help karne ki puri koshish karungi, ya phir tumhe support team ke paas guide karungi! 🛠️💖")
+        return
+
+    # If the User Expresses General Confusion or Frustration
+    confusion_frustration_keywords = ["mujhe samajh nahi aa raha", "bahut confusing hai", "ugh", "pata nahi kya karu"]
+    if any(keyword in user_text for keyword in confusion_frustration_keywords):
+        # Nyraa: "Hey, relax, cutie! 😌 Koi baat nahi, main yahi hoon. Kya cheez samajh nahi aa rahi? Main phir se explain kar sakti hoon na! Bas poochho! 🤗💖"
+        await update.message.reply_text("Hey, relax, cutie! 😌 Koi baat nahi, main yahi hoon. Kya cheez samajh nahi aa rahi? Main phir se explain kar sakti hoon na! Bas poochho! 🤗💖")
+        return
+
+    # If the User Sends a General Greeting (not /start) or Chit-chat
+    general_greeting_keywords = ["hi", "hello", "how are you", "what's up", "kya haal hai"]
+    if any(keyword in user_text for keyword in general_greeting_keywords):
+        # Nyraa: "Hiii there! 👋 Main theek hoon, tum kaise ho, cutie? Kuch help chahiye ya bas hi-hello? 😉💖"
+        await update.message.reply_text("Hiii there! 👋 Main theek hoon, tum kaise ho, cutie? Kuch help chahiye ya bas hi-hello? 😉💖")
+        return
+
+    # If the User Replies with Double Meaning / Dark Dank Jokes / Naughty Way
+    naughty_keywords = ["naughty", "sexy", "hot", "double meaning", "joke"]
+    if any(keyword in user_text for keyword in naughty_keywords) or \
+       (len(user_text.split()) > 1 and not any(keyword in user_text for keyword in affirmative_keywords + premium_info_keywords + process_inquiry_keywords + offer_inquiry_keywords + free_trial_keywords + negative_keywords + general_help_keywords + cancel_refund_keywords + technical_issue_keywords + confusion_frustration_keywords + general_greeting_keywords)):
+        # Nyraa: "Haha, lagta hai aap masti ke mood mein ho! 😉 Par main toh yahaan aapko premium ke perks batane aayi hoon, na? Toh, plan choose karoge ya kuch aur jaanna hai, sweetheart? 😉💖"
+        await update.message.reply_text("Haha, lagta hai aap masti ke mood mein ho! 😉 Par main toh yahaan aapko premium ke perks batane aayi hoon, na? Toh, plan choose karoge ya kuch aur jaanna hai, sweetheart? 😉💖")
+        return
+
+    # Fallback for any other unhandled text, or if the user types a TXN ID
+    if user_text.startswith("txn id"):
+        await handle_txn_id(update, context)
+    else:
+        # If none of the above specific handlers match, it's an off-topic or unrecognized message.
+        await update.message.reply_text("Heyyy, thoda aur clear karoge? 🧐 Kya jaanna chahte ho, sweetheart? Main yahi hoon help karne ke liye! 😊💖")
+
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles inline button presses for plan selection and payment method selection."""
@@ -226,18 +398,32 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         context.user_data['selected_plan_amount'] = selected_amount
         logger.info(f"User {user_id} selected plan for amount: {selected_amount}")
 
-        # Offer payment options
-        payment_options_keyboard = [
-            [InlineKeyboardButton("💳 UPI", callback_data=f"paymethod_{selected_amount}_upi")],
-            [InlineKeyboardButton("💰 Binance", callback_data=f"paymethod_{selected_amount}_binance")],
-            [InlineKeyboardButton("⭐ Telegram Stars", callback_data=f"paymethod_{selected_amount}_telegram_star")],
-        ]
-        reply_markup = InlineKeyboardMarkup(payment_options_keyboard)
+        if selected_amount == 199.0:
+            # Nyraa: "Okay, 199/- monthly! ✅ Par wait, ek chhota sa step hai! 🤫 Pehle verify kar lo ki tum human ho, okay? Is link pe click karo: [Your Verification Link Here] ✨ Jaise hi complete hoga, main aage ki details bhejungi, promise! 😉💖"
+            await query.edit_message_text(f"Okay, 199/- monthly! ✅ Par wait, ek chhota sa step hai! 🤫 Pehle verify kar lo ki tum human ho, okay? Is link pe click karo: {config.VERIFICATION_LINK} ✨ Jaise hi complete hoga, main aage ki details bhejungi, promise! 😉💖")
+            
+            # For demonstration, directly ask for payment method after this.
+            # In a real bot, you'd wait for a signal from your verification system.
+            payment_options_keyboard = [
+                [InlineKeyboardButton("💳 UPI", callback_data=f"paymethod_{selected_amount}_upi")],
+            ]
+            reply_markup = InlineKeyboardMarkup(payment_options_keyboard)
+            await query.message.reply_text(
+                "Yayyy! Verification done! 🎉 Ab batao, payment kisse karoge? QR ya UPI ID? 😉💖",
+                reply_markup=reply_markup
+            )
 
-        await query.edit_message_text(
-            f"You have selected the ₹{int(selected_amount)} plan. Please choose your preferred payment method:",
-            reply_markup=reply_markup
-        )
+        elif selected_amount == 399.0:
+            # Nyraa: "Smart choice, cutie! 399/- for 3 months it is! 🥳 Ab main tumhe payment link send kar rahi hoon. Jaise hi payment ho jaayegi na, tumhara premium access unlock ho jaayega! Let's go! 🚀💖"
+            # Offer payment options directly for 399 plan
+            payment_options_keyboard = [
+                [InlineKeyboardButton("💳 UPI", callback_data=f"paymethod_{selected_amount}_upi")],
+            ]
+            reply_markup = InlineKeyboardMarkup(payment_options_keyboard)
+            await query.edit_message_text(
+                f"Smart choice, cutie! 399/- for 3 months it is! 🥳 Ab main tumhe payment details bhejungi. Please choose your preferred payment method:",
+                reply_markup=reply_markup
+            )
 
     elif callback_data.startswith("paymethod_"):
         parts = callback_data.split("_")
@@ -260,68 +446,33 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             await query.edit_message_text("There was a mismatch in your selected plan. Please start again with /start.")
             return
 
-        if selected_method == "telegram_star":
-            # For Telegram Stars, we use send_invoice
-            plan_name = f"₹{int(selected_amount)} Plan"
-            plan_description = f"Subscription for {config.SUBSCRIPTION_PLANS.get(selected_amount)} days."
-            # The payload should be unique for each transaction to identify it later
-            payload = f"stars_payment_{user_id}_{int(selected_amount)}_{uuid.uuid4()}" 
+        # Only UPI method is expected now
+        if selected_method == "upi":
+            payment_info = config.PAYMENT_DETAILS.get(selected_amount, {}).get("upi")
 
-            # IMPORTANT: Determine the correct amount in Stars (XTR)
-            # Telegram Stars are typically 1 Star = 1 USD equivalent, but the exact conversion
-            # for your region might vary. You need to determine how many Stars correspond to your INR amount.
-            # For simplicity, we'll assume 1 INR = 1 Star for this example.
-            # In a real scenario, you'd convert INR to XTR based on current rates or fixed prices.
-            # Telegram Stars amounts are in the smallest unit (e.g., 100 for 1 Star).
-            # So, if your plan is 69 INR, and you decide 1 INR = 1 Star, then 69 Stars.
-            # If 1 Star = 80 INR, then 69/80 = 0.8625 Stars, so you'd need to adjust your pricing.
-            # For this example, let's assume 1 Star = 1 INR for simplicity in the code.
-            # So, 69 INR becomes 6900 units (69 Stars).
-            stars_amount_in_smallest_unit = int(selected_amount * 100) # Assuming 1 Star = 100 units (e.g., cents/paise equivalent)
+            if not payment_info:
+                await query.edit_message_text(f"Payment details for UPI not available for ₹{int(selected_amount)}. Please contact support.")
+                logger.error(f"Payment details missing for amount {selected_amount} and method UPI")
+                return
 
-            prices = [LabeledPrice(label=plan_name, amount=stars_amount_in_smallest_unit)]
+            payment_link = payment_info.get("link")
+            qr_code_url = payment_info.get("qr_code")
 
-            try:
-                await context.bot.send_invoice(
-                    chat_id=user_id,
-                    title=plan_name,
-                    description=plan_description,
-                    payload=payload,
-                    provider_token="", # Leave empty for Telegram Stars
-                    currency="XTR", # Telegram Stars currency
-                    prices=prices,
-                    start_parameter="stars_purchase", # Optional: for deep linking
-                )
-                await query.edit_message_text(f"Please complete your ₹{int(selected_amount)} payment using Telegram Stars via the invoice sent to you.")
-                logger.info(f"Sent Telegram Stars invoice to user {user_id} for {selected_amount} INR equivalent.")
-            except Exception as e:
-                logger.error(f"Failed to send Telegram Stars invoice to user {user_id}: {e}", exc_info=True)
-                await query.edit_message_text("❌ Failed to create Telegram Stars invoice. Please try again later or choose another payment method.")
-            return # Exit after handling Stars payment
+            payment_message = (
+                f"You have selected the ₹{int(selected_amount)} plan via UPI.\n\n"
+                "Scan the QR or click the UPI ID link below 👇\n\n"
+                f"🔗 {payment_link}\n\n"
+                "After you have sent the payment, send your TXN ID to confirm.\n"
+                "Example: `TXN ID 264861XXXXX`"
+            )
 
-        # For UPI and Binance, continue with existing logic
-        payment_info = config.PAYMENT_DETAILS.get(selected_amount, {}).get(selected_method)
-
-        if not payment_info:
-            await query.edit_message_text(f"Payment details for {selected_method} not available for ₹{int(selected_amount)}. Please choose another method or contact support.")
-            logger.error(f"Payment details missing for amount {selected_amount} and method {selected_method}")
-            return
-
-        payment_link = payment_info.get("link")
-        qr_code_url = payment_info.get("qr_code")
-
-        payment_message = (
-            f"You have selected the ₹{int(selected_amount)} plan via {selected_method.replace('_', ' ').title()}.\n\n"
-            "Scan the QR or click the link below 👇\n\n"
-            f"🔗 {payment_link}\n\n"
-            "After you have sent the payment, send your TXN ID to confirm.\n"
-            "Example: `TXN ID 264861XXXXX`"
-        )
-
-        if qr_code_url:
-            await query.message.reply_photo(photo=qr_code_url, caption=payment_message, parse_mode="Markdown")
+            if qr_code_url:
+                await query.message.reply_photo(photo=qr_code_url, caption=payment_message, parse_mode="Markdown")
+            else:
+                await query.edit_message_text(payment_message, parse_mode="Markdown")
         else:
-            await query.edit_message_text(payment_message, parse_mode="Markdown")
+            # This case should ideally not be reached if buttons are correctly set
+            await query.edit_message_text("Invalid payment method selected. Please choose UPI.")
 
 
 async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -334,9 +485,8 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     username = user.username if user.username else user.first_name
     text = update.message.text.strip()
 
-    if not text.lower().startswith("txn id"):
-        return # Not a TXN ID message, ignore
-
+    # The calling `handle_message` function already checks for "TXN ID" prefix.
+    # So, we can directly parse it here.
     parts = text.split(" ")
     if len(parts) < 3:
         await update.message.reply_text(
@@ -352,7 +502,7 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     selected_plan_amount = context.user_data.get('selected_plan_amount')
     if selected_plan_amount is None:
         await update.message.reply_text(
-            "Please select a plan first using the /start command before sending a TXN ID."
+            "Please select a plan first using the /start command or by choosing from the options provided."
         )
         return
 
@@ -442,7 +592,6 @@ async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Failed to update premium status for user {user_id} with TXN ID {txn_id}.")
 
 # --- New Handler: Listen to messages in the UPI TXN Group ---
-# This handler is registered directly in main() to ensure it's part of the application.
 async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Listens for messages in the configured TXN_GROUP_ID, parses them for UPI TXN IDs and amounts,
@@ -452,9 +601,6 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logger.info(f"Received message in TXN group {config.TXN_GROUP_ID}: {message_text}")
 
     # Regex to extract TXN ID and Amount from common UPI SMS formats
-    # This regex is a starting point and might need adjustment based on your exact SMS format.
-    # It looks for patterns like "TxnId: <ID>", "Txn ID: <ID>", "UPI Ref No: <ID>"
-    # and amounts like "Rs. <AMOUNT>", "INR <AMOUNT>", "Rs<AMOUNT>"
     txn_id_match = re.search(r'(?:TxnId|Txn ID|UPI Ref No|Ref No|UTR|Transaction ID)[:\s]*([a-zA-Z0-9]{10,20})', message_text, re.IGNORECASE)
     amount_match = re.search(r'(?:Rs\.?|INR)\s*([\d,]+\.?\d{0,2})', message_text, re.IGNORECASE)
 
@@ -476,7 +622,6 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 return
         except Exception as e:
             logger.error(f"Error checking for existing TXN ID {txn_id} in DB: {e}", exc_info=True)
-            # Continue trying to insert, as this might be a transient DB issue
             pass
 
         # Store the confirmed transaction in MongoDB
@@ -493,100 +638,6 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             logger.error(f"Error inserting confirmed TXN ID {txn_id} into DB: {e}", exc_info=True)
     else:
         logger.debug(f"No TXN ID or Amount found in group message: {message_text}")
-
-async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles pre-checkout queries from Telegram Stars payments."""
-    query = update.pre_checkout_query
-    user_id = query.from_user.id
-    payload = query.invoice_payload
-
-    logger.info(f"Received pre_checkout_query from {user_id} with payload: {payload}")
-
-    # You can perform final checks here before confirming the payment
-    # For example, verify the payload structure, ensure the user is still active, etc.
-    if not payload.startswith("stars_payment_"):
-        await query.answer(ok=False, error_message="Invalid payment request payload.")
-        logger.warning(f"Invalid payload in pre_checkout_query: {payload}")
-        return
-
-    # All checks passed, confirm the payment
-    await query.answer(ok=True)
-    logger.info(f"Pre-checkout query answered successfully for {user_id}.")
-
-async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles successful Telegram Stars payments."""
-    message = update.message
-    successful_payment = message.successful_payment
-    user_id = message.from_user.id
-    username = message.from_user.username if message.from_user.username else message.from_user.first_name
-    payload = successful_payment.invoice_payload
-
-    logger.info(f"Successful payment received from {user_id} for payload: {payload}")
-    logger.info(f"Payment details: Total amount: {successful_payment.total_amount}, Currency: {successful_payment.currency}")
-
-    # Parse the payload to get the original amount and user_id
-    try:
-        # Expected payload format: "stars_payment_<user_id>_<amount_in_inr>_<uuid>"
-        parts = payload.split("_")
-        if len(parts) >= 4 and parts[0] == "stars" and parts[1] == "payment":
-            original_user_id = int(parts[2])
-            paid_amount_inr = float(parts[3]) # This is the INR equivalent you expected
-        else:
-            raise ValueError("Unexpected payload format for successful payment")
-    except (ValueError, IndexError) as e:
-        logger.error(f"Error parsing successful payment payload '{payload}': {e}", exc_info=True)
-        await message.reply_text("❌ An error occurred while processing your payment. Please contact support.")
-        return
-
-    # Optional: Verify user_id matches and amount is as expected
-    if original_user_id != user_id:
-        logger.warning(f"Mismatch in user ID for successful Stars payment. Expected {original_user_id}, got {user_id}.")
-        # You might want to log this and potentially alert an admin.
-        await message.reply_text("There was an issue verifying your payment. Please contact support with your Telegram Stars payment details.")
-        return
-
-    # Convert the received total_amount (in Stars, smallest unit) back to your expected INR equivalent
-    # This conversion logic depends on how you defined your prices when sending the invoice.
-    # If you used `int(selected_amount * 100)` for stars_amount_in_smallest_unit, then:
-    expected_stars_amount_in_smallest_unit = int(paid_amount_inr * 100) 
-    
-    if successful_payment.total_amount < expected_stars_amount_in_smallest_unit:
-        await message.reply_text(
-            f"❌ Your Telegram Stars payment of {successful_payment.total_amount / 100:.2f} Stars was less than the required amount for the ₹{int(paid_amount_inr)} plan. Please contact support."
-        )
-        logger.warning(f"Stars payment too low. Received {successful_payment.total_amount}, expected {expected_stars_amount_in_smallest_unit}.")
-        return
-
-    duration_days = config.SUBSCRIPTION_PLANS.get(paid_amount_inr)
-    if not duration_days:
-        logger.error(f"No duration found for paid amount {paid_amount_inr} from Stars payment.")
-        await message.reply_text("❌ An internal error occurred after payment. Please contact support.")
-        return
-
-    # Update user's premium status
-    expires_at_ist = await update_premium_status(user_id, username, duration_days)
-
-    if expires_at_ist:
-        # For Stars, there's no "TXN ID" to mark as used in confirmed_upi_txns.
-        # You might want a separate collection for Stars transactions if you need to track them.
-        # For now, we just grant access.
-        
-        await message.reply_text(
-            f"Dear {username}, 🎉\n\n"
-            f"✅ Your Telegram Stars payment has been confirmed.\n"
-            f"🗓️ Premium access granted for {duration_days} days!\n"
-            f"Expires on: {expires_at_ist.strftime('%d %B %Y %H:%M %Z')}.\n\n"
-            "You can now enjoy premium content with the File-Sharing Bot!"
-        )
-        logger.info(f"Premium access granted for user {user_id} for {duration_days} days via Telegram Stars.")
-        # Clear the selected plan from user_data after successful payment
-        if 'selected_plan_amount' in context.user_data:
-            del context.user_data['selected_plan_amount']
-    else:
-        await message.reply_text(
-            "An error occurred while updating your premium status. Please try again later or contact support."
-        )
-        logger.error(f"Failed to update premium status for user {user_id} after Stars payment.")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -615,12 +666,8 @@ def main() -> None:
 
     # Register handlers for private chat with the user
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_txn_id))
-    application.add_handler(CallbackQueryHandler(button_callback_handler)) # Handles both plan and payment method selection
-
-    # Handlers for Telegram Stars payments
-    application.add_handler(PreCheckoutQueryHandler(pre_checkout_callback))
-    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CallbackQueryHandler(button_callback_handler)) # Handles plan selection and payment method selection
 
     # Register handler for messages coming from the specific TXN group
     application.add_handler(MessageHandler(filters.Chat(config.TXN_GROUP_ID) & filters.TEXT & ~filters.COMMAND, chat_id_handler))
