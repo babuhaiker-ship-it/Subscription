@@ -6,17 +6,17 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 # --- Configuration ---
 # IMPORTANT: Replace with your actual API ID, API HASH, and BOT TOKEN
 # Get these from my.telegram.org and BotFather respectively.
-API_ID = os.environ.get("API_ID", "YOUR_API_ID") # Replace with your API ID
-API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH") # Replace with your API HASH
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN") # Replace with your Bot Token
+API_ID = os.environ.get("API_ID", "29800015") # Replace with your API ID
+API_HASH = os.environ.get("API_HASH", "c8f37108be31ab9ea2818bfe533fbb6f") # Replace with your API HASH
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk") # Replace with your Bot Token
 
 # Channel where payment confirmations are posted (simulated)
 # In a real scenario, this would be a private channel where a payment gateway
 # or manual system posts payment confirmations.
-PAYMENT_CHANNEL_ID = -1001234567890 # Replace with your payment channel ID (e.g., -1001234567890 for a supergroup)
+PAYMENT_CHANNEL_ID = -1002685844988 # Replace with your payment channel ID (e.g., -1001234567890 for a supergroup)
 
 # Admin User ID (for potential notifications, though not fully implemented here)
-ADMIN_USER_ID = 123456789 # Replace with your Telegram User ID for admin notifications
+ADMIN_USER_ID = 6612030110 # Replace with your Telegram User ID for admin notifications
 
 # Verification Link (simulated)
 VERIFICATION_LINK = "https://example.com/human_verification" # Replace with your actual verification link
