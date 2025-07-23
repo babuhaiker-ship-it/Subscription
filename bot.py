@@ -1,393 +1,637 @@
 import os
+import logging
+from datetime import datetime, timedelta
+import pytz
+from pymongo import MongoClient
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    CallbackQueryHandler,
+    PreCheckoutQueryHandler, # Import PreCheckoutQueryHandler
+)
+import uuid
 import re
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # --- Configuration ---
-# IMPORTANT: Replace with your actual API ID, API HASH, and BOT TOKEN
-# Get these from my.telegram.org and BotFather respectively.
-API_ID = os.environ.get("API_ID", "29800015") # Replace with your API ID
-API_HASH = os.environ.get("API_HASH", "c8f37108be31ab9ea2818bfe533fbb6f") # Replace with your API HASH
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk") # Replace with your Bot Token
+class BotConfig:
+    # Your Subscription Bot's Token (from BotFather for this bot)
+    BOT_TOKEN = '7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk' # REPLACE WITH YOUR SUBSCRIPTION BOT'S TOKEN
 
-# Channel where payment confirmations are posted (simulated)
-# In a real scenario, this would be a private channel where a payment gateway
-# or manual system posts payment confirmations.
-PAYMENT_CHANNEL_ID = -1002685844988 # Replace with your payment channel ID (e.g., -1001234567890 for a supergroup)
+    # Your MongoDB URI (MUST be the SAME as your File-Sharing Bot's MONGO_URI)
+    MONGO_URI = 'mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0' # REPLACE WITH YOUR ACTUAL MONGO_URI
 
-# Admin User ID (for potential notifications, though not fully implemented here)
-ADMIN_USER_ID = 6612030110 # Replace with your Telegram User ID for admin notifications
+    # MongoDB Database and Collection Names (MUST be the SAME as your File-Sharing Bot)
+    MONGO_DB_NAME = "spicybot"
+    USERS_COLLECTION_NAME = "users"
+    TOKENS_COLLECTION_NAME = "tokens"
+    CONFIRMED_TXN_COLLECTION_NAME = "confirmed_upi_txns" # New collection to store confirmed UPI transactions
 
-# Verification Link (simulated)
-VERIFICATION_LINK = "https://example.com/human_verification" # Replace with your actual verification link
+    # Define subscription plans and their corresponding durations in days
+    SUBSCRIPTION_PLANS = {
+        69.0: 7,   # ₹69 for 7 days (Weekly Trial)
+        199.0: 30  # ₹199 for 30 days (Monthly)
+    }
 
-# Payment Details (simulated)
-UPI_ID = "your_upi_id@bank" # Replace with your actual UPI ID
-QR_CODE_URL = "https://placehold.co/300x300/000000/FFFFFF?text=Scan+QR+Code" # Replace with your QR code image URL or a placeholder
+    # Payment details for each plan and method
+    # IMPORTANT: Replace these with your actual dynamic links/QR codes for each amount and method
+    # For demonstration, placeholders are used for QR codes and links.
+    # For Telegram Stars, the 'link' and 'qr_code' are not directly used as send_invoice handles it.
+    PAYMENT_DETAILS = {
+        69.0: {
+            "upi": {
+                "link": "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=69&cu=INR",
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 69 UPI
+            },
+            "binance": {
+                "link": "https://pay.binance.com/qr/YOUR_BINANCE_PAY_ID?amount=69&currency=INR", # Placeholder Binance link
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 69 Binance
+            },
+            # For Telegram Stars, the 'link' and 'qr_code' here are for display purposes only
+            # The actual invoice is generated via send_invoice
+            "telegram_star": {
+                "link": "https://t.me/wallet/star/invoice?amount=69", # This is a generic link, actual one is dynamic
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 69 Telegram Stars
+            }
+        },
+        199.0: {
+            "upi": {
+                "link": "upi://pay?pa=kanhaiyalal-49@ptaxis&pn=Kanhaiya&am=199&cu=INR",
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 199 UPI
+            },
+            "binance": {
+                "link": "https://pay.binance.com/qr/YOUR_BINANCE_PAY_ID?amount=199&currency=INR", # Placeholder Binance link
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 199 Binance
+            },
+            "telegram_star": {
+                "link": "https://t.me/wallet/star/invoice?amount=199", # This is a generic link, actual one is dynamic
+                "qr_code": "https://i.postimg.cc/rp5M3SWC/IMG-20250717-022522-587.webp" # Placeholder QR for 199 Telegram Stars
+            }
+        }
+    }
 
-# --- Bot Initialization ---
-app = Client(
-    "nyraa_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    # ID of the Telegram Group where UPI SMS notifications are forwarded
+    # The bot MUST be an admin in this group with 'Read All Messages' permission.
+    TXN_GROUP_ID = -1002685844988 # REPLACE WITH YOUR ACTUAL UPI SMS FORWARDING GROUP CHAT ID (e.g., -100xxxxxxxxxx)
+
+try:
+    config = BotConfig()
+    if not all([config.BOT_TOKEN, config.MONGO_URI, config.TXN_GROUP_ID]):
+        raise ValueError("One or more essential configuration variables are not set. Please check BOT_TOKEN, MONGO_URI, TXN_GROUP_ID.")
+except Exception as e:
+    raise RuntimeError(f"Failed to load bot configuration: {e}")
+
+# --- Logging Setup ---
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-# --- User State Management ---
-# Stores user's current conversation state and chosen plan.
-# Structure: {user_id: {"state": "CURRENT_STATE", "plan": "SELECTED_PLAN", "expected_amount": 0}}
-user_states = {}
+# --- MongoDB Setup ---
+client = None
+db = None
+users_collection = None
+tokens_collection = None
+confirmed_txn_collection = None # New collection instance
 
-# Define conversation states
-STATE_START = "START"
-STATE_AWAITING_PLAN_CHOICE = "AWAITING_PLAN_CHOICE"
-STATE_AWAITING_VERIFICATION_CONFIRMATION = "AWAITING_VERIFICATION_CONFIRMATION"
-STATE_AWAITING_PAYMENT_METHOD = "AWAITING_PAYMENT_METHOD"
-STATE_AWAITING_PAYMENT = "AWAITING_PAYMENT"
-STATE_AWAITING_TNX_ID = "AWAITING_TNX_ID"
+try:
+    client = MongoClient(config.MONGO_URI)
+    db = client[config.MONGO_DB_NAME]
+    users_collection = db[config.USERS_COLLECTION_NAME]
+    tokens_collection = db[config.TOKENS_COLLECTION_NAME]
+    confirmed_txn_collection = db[config.CONFIRMED_TXN_COLLECTION_NAME]
+    
+    # Create index on txn_id for faster lookups
+    confirmed_txn_collection.create_index([("txn_id", 1)], unique=True)
+    
+    logger.info(f"MongoDB connected successfully to DB: {config.MONGO_DB_NAME}")
+    logger.info(f"Using collections: {config.USERS_COLLECTION_NAME}, {config.TOKENS_COLLECTION_NAME}, {config.CONFIRMED_TXN_COLLECTION_NAME}")
+except Exception as e:
+    logger.critical(f"Error connecting to MongoDB: {e}", exc_info=True)
+    client = None # Ensure client is None if connection fails
+    # Exit if MongoDB connection fails, as the bot cannot function without it
+    exit(1) 
 
-# Define plans and their prices
-PLANS = {
-    "199_monthly": 199,
-    "399_3months": 399
-}
+# --- Helper Functions ---
 
-# --- Keyword Patterns (Compiled for efficiency) ---
-# Affirmative Responses
-AFFIRMATIVE_KEYWORDS = re.compile(
-    r"^(ha|h|han|hanji|haan|yes|y|yup|sure|bilkul|theek hai|ok|okay|hmm|acha|ji|batao|bolo|chahiye|yes please|interested|mujhe lena hai|buy karna hai|kahan se milega|haanji|definitely|absolutely|done|chalega|why not|haan chahiye|lena hai|kharidna hai|purchase karna hai|mil sakta hai|sahi hai|chalo|kar do|pakka|zaroor|of course|yeah|yep|alright|fine|go ahead|tell me|show me|I want it|I'm in|ready|let's do it|bring it on|ready to buy|how to get|where to get|kahan milega|please batao|haan bolo|okay batao|haan theek hai|haan ji|mujhe chahiye|yes I want|I'm interested|mujhe purchase karna hai|premium chahiye|haan premium|yes premium|premium lena hai|premium buy karna hai|premium kaise milega|ji haan|ji bilkul|ji sure|ji theek hai|ji ok|ji okay|ji hmm|ji acha|ji ji|ji batao|ji bolo|ji chahiye|ji yes please|ji interested|ji mujhe lena hai|ji buy karna hai|ji kahan se milega|ji definitely|ji absolutely|ji done|ji chalega|ji why not|ji haan chahiye|ji lena hai|ji kharidna hai|ji purchase karna hai|ji mil sakta hai|ji sahi hai|ji chalo|ji kar do|ji pakka|ji zaroor|ji of course|ji yeah|ji yep|ji alright|ji fine|ji go ahead|ji tell me|ji show me|ji I want it|ji I'm in|ji ready|ji let's do it|ji bring it on|ji ready to buy|ji how to get|ji where to get|ji kahan milega|ji please batao|ji bolo|ji theek hai|ji ji|ji mujhe chahiye|ji yes I want|ji I'm interested|ji mujhe purchase karna hai|ji premium chahiye|ji haan premium|ji yes premium|ji premium lena hai|ji premium buy karna hai|ji premium kaise milega|okay ji|theek ji|sahi ji|bilkul sahi|bilkul theek|bilkul ok|bilkul okay|bilkul ji|bilkul sure|bilkul haan|bilkul yes|bilkul interested|bilkul chahiye|bilkul lena hai|bilkul kharidna hai|bilkul purchase karna hai|bilkul mil sakta hai|bilkul ready|bilkul done|bilkul chalega|bilkul zaroor|bilkul of course|bilkul yeah|bilkul yep|bilkul alright|bilkul fine|bilkul go ahead|bilkul tell me|bilkul show me|bilkul I want it|bilkul I'm in|bilkul let's do it|bilkul bring it on|bilkul ready to buy|bilkul how to get|bilkul where to get|bilkul kahan milega|bilkul please batao|bilkul haan bolo|bilkul okay batao|bilkul haan theek hai|bilkul haan ji|bilkul mujhe chahiye|bilkul yes I want|bilkul I'm interested|bilkul mujhe purchase karna hai|bilkul premium chahiye|bilkul haan premium|bilkul yes premium|bilkul premium lena hai|bilkul premium buy karna hai|bilkul premium kaise milega|hmm hmm|acha ji|acha theek hai|acha ok|acha okay|acha haan|acha yes|acha sure|acha bilkul|acha interested|acha chahiye|acha lena hai|acha kharidna hai|acha purchase karna hai|acha mil sakta hai|acha ready|acha done|acha chalega|acha zaroor|acha of course|acha yeah|acha yep|acha alright|acha fine|acha go ahead|acha tell me|acha show me|acha I want it|acha I'm in|acha let's do it|acha bring it on|acha ready to buy|acha how to get|acha where to get|acha kahan milega|acha please batao|acha haan bolo|acha okay batao|acha haan theek hai|acha haan ji|acha mujhe chahiye|acha yes I want|acha I'm interested|acha mujhe purchase karna hai|acha premium chahiye|acha haan premium|acha yes premium|acha premium lena hai|acha premium buy karna hai|acha premium kaise milega|sounds good|sounds great|sounds perfect|sounds fine|sounds okay|sounds cool|sounds awesome|sounds amazing|sounds fantastic|sounds wonderful|sounds nice|sounds right|sounds correct|sounds accurate|sounds valid|sounds legit|sounds real|sounds true|sounds genuine|sounds authentic|sounds proper|sounds fitting|sounds suitable|sounds appropriate|sounds ideal|sounds perfect|sounds just right|sounds exactly right|sounds spot on|sounds on point|sounds good to go|sounds all right|sounds all good|sounds all clear|sounds all set|sounds all ready|sounds all prepared|sounds all done|sounds all complete|sounds all finished|sounds all wrapped up|sounds all sorted|sounds all arranged|sounds all organized|sounds all managed|sounds all handled|sounds all taken care of|sounds all set up|sounds all in order|sounds all ready to go|sounds all systems go|sounds all good to proceed|sounds all clear to proceed|sounds all set to proceed|sounds all ready to proceed|sounds all prepared to proceed|sounds all done to proceed|sounds all complete to proceed|sounds all finished to proceed|sounds all wrapped up to proceed|sounds all sorted to proceed|sounds all arranged to proceed|sounds all organized to proceed|sounds all managed to proceed|sounds all handled to proceed|sounds all taken care of to proceed|sounds all set up to proceed|sounds all in order to proceed|go ahead|proceed|continue|let me know|inform me|guide me|instruct me|direct me|lead me|take me|bring me|give me|provide me|offer me|present me|share with me|explain to me|describe to me|elaborate on|clarify|shed light on|enlighten me|make clear|make plain|make explicit|make obvious|make apparent|make evident|make manifest|make known|make public|make available|make accessible|make ready|make prepared|make set|make done|make complete|make finished|make wrapped up|make sorted|make arranged|make organized|make managed|make handled|make taken care of|make set up|make in order)$", re.IGNORECASE)
+def get_ist_now():
+    """Returns the current time in IST timezone."""
+    ist = pytz.timezone('Asia/Kolkata')
+    return datetime.now(ist)
 
-# Inquire about Premium/Plans
-PREMIUM_INFO_KEYWORDS = re.compile(
-    r"^(kya hai premium|benefits|what's included|why premium|premium mein kya hai|features|premium ke fayde|kya milega premium mein|premium details|premium info|kya offers hain|premium features|what are the benefits|what is premium|what's the premium plan|premium ke advantages|premium ki jaankari|premium ki khas baatein|premium ke perks|tell me about premium|explain premium|premium kya deta hai|premium mein kya milta hai|premium ke bare mein batao|premium ke bare mein jaanna hai|fayde kya hain|advantages kya hain|what do I get|what's special about premium|premium plan kya hai|premium ke bare mein bol|premium kya hota hai|premium kya cheez hai|premium ka matlab kya hai|premium ki definition|premium ki explanation|premium ki information|premium ke bare mein detail|premium ke bare mein info|premium ke bare mein explain karo|premium ke bare mein samjhao|premium ke bare mein jankari do|premium ke bare mein bataiye|premium ke bare mein bolna|premium ke bare mein kuch batao|premium ke bare mein sab kuch|premium ke bare mein poori jaankari|premium ke bare mein complete info|premium ke bare mein full details|premium ke bare mein brief|premium ke bare mein short|premium ke bare mein summary|premium ke bare mein overview|premium ke bare mein highlights|premium ke bare mein key points|premium ke bare mein main features|premium ke bare mein main benefits|premium ke bare mein main advantages|premium ke bare mein main perks|premium ke bare mein main points|premium ke bare mein main things|premium ke bare mein main aspects|premium ke bare mein main elements|premium ke bare mein main components|premium ke bare mein main parts|premium ke bare mein main sections|premium ke bare mein main categories|premium ke bare mein main types|premium ke bare mein main kinds|premium ke bare mein main sorts|premium ke bare mein main varieties|premium ke bare mein main forms|premium ke bare mein main versions|premium ke bare mein main editions|premium ke bare mein main releases|premium ke bare mein main updates|premium ke bare mein main upgrades|premium ke bare mein main improvements|premium ke bare mein main enhancements|premium ke bare mein main additions|premium ke bare mein main changes|premium ke bare mein main modifications|premium ke bare mein main alterations|premium ke bare mein main revisions|fayde kya hain|kya fayde hain|kya kya fayde hain|kya benefits hain|kya kya benefits hain|benefits kya hain|benefits kya kya hain|advantages kya hain|kya advantages hain|kya kya advantages hain|perks kya hain|kya perks hain|kya kya perks hain|features kya hain|kya features hain|kya kya features hain|what's inside|what's included|what do I get|what will I get|what's the use|what's the advantage|what's the benefit|what's the perk|what's the feature|what's the special thing|what's special|what's unique|what's different|what's exclusive|what's special about it|what's special about premium|premium ki khas baat|premium ki khaasiyat|premium ki visheshta|premium ki khoobi|premium ki quality|premium ki value|premium ki worth|premium ki importance|premium ki significance|premium ki utility|premium ki functionality|premium ki capability|premium ki capacity|premium ki power|premium ki strength|premium ki potential|premium ki scope|premium ki range|premium ki extent|premium ki breadth|premium ki depth|premium ki width|premium ki height|premium ki length|premium ki size|premium ki dimension|premium ki scale|premium ki magnitude|details|info|information|jaankari|jankari|poori jaankari|complete info|full details|more info|more details|tell me more|explain more|elaborate|clarify|give me details|give me info|give me information|provide details|provide info|provide information|can you tell me more|can you explain more|can you elaborate|can you clarify|can you give me details|can you give me info|can you give me information|I want to know more|I want to know details|I want to know info|I want to know information|I want to know about premium|I want to know about the plan|I want to know about the features|I want to know about the benefits|I want to know about the advantages|I want to know about the perks|I want to know about the details|I want to know about the info|I want to know about the information|I want to know about the offers|I want to know about the deals|I want to know about the discounts|I want to know about the price|I want to know about the cost|I want to know about the charges|I want to know about the fees|I want to know about the payment|I want to know about the subscription|I want to know about the process|I want to know about the steps|I want to know about the procedure|I want to know about the method|I want to know about the way|I want to know about the how-to|I want to know about the guide|I want to know about the tutorial|I want to know about the instructions|I want to know about the rules|I want to know about the terms|I want to know about the conditions|I want to know about the policy|I want to know about the agreement|I want to know about the contract|I want to know about the legal|I want to know about the fine print|I want to know about the small print|I want to know about the terms and conditions|I want to know about the privacy policy|I want to know about the refund policy|I want to know about the cancellation policy|I want to know about the support|I want to know about the help|I want to know about the contact|I want to know about the customer service|I want to know about the customer support|I want to know about the technical support|I want to know about the live chat|I want to know about the email|I want to know about the phone|I want to know about the address|I want to know about the location|I want to know about the hours|I want to know about the timings|I want to know about the availability|I want to know about the accessibility|I want to know about the requirements|I want to know about the prerequisites|I want to know about the eligibility|I want to know about the criteria|I want to know about the conditions|I want to know about the limitations|I want to know about the restrictions|I want to know about the boundaries|I want to know about the scope|I want to know about the range|I want to know about the extent|I want to know about the breadth|I want to know about the depth|I want to know about the width|I want to know about the height|I want to know about the length|I want to know about the size|I want to know about the dimension|I want to know about the scale|premium ki magnitude)$", re.IGNORECASE)
-
-# Inquire about Process/How to Subscribe
-HOW_TO_SUBSCRIBE_KEYWORDS = re.compile(
-    r"^(kaise lein|how to subscribe|process kya hai|buy karna hai|mujhe lena hai|kahan se milega|kya karna padega|subscribe kaise karein|how to buy|steps kya hain|payment kaise hogi|kya process hai|kaise purchase karein|how to get premium|how can I subscribe|what's the procedure|what are the steps|subscription process|payment process|how to activate|kaise activate karein|mujhe premium lena hai, kaise lu|premium kaise kharidein|kya tareeka hai|method kya hai|how to proceed|next steps|kya karu|kaise shuru karein|kaise loon|kaise buy karein|kaise purchase karein|kaise kharidein|kaise subscribe karein|kaise activate karein|kaise get karein|kaise prapt karein|kaise hasil karein|kaise paayein|kaise start karein|kaise aage badhein|kaise complete karein|kaise finish karein|kaise done karein|kaise pura karein|kaise samapt karein|kaise khatam karein|kaise niptaayein|kaise handle karein|kaise manage karein|kaise arrange karein|kaise organize karein|kaise set up karein|kaise in order karein|kaise ready karein|kaise prepare karein|kaise ready to go karein|kaise systems go karein|kaise good to proceed karein|kaise clear to proceed karein|kaise set to proceed karein|kaise ready to proceed karein|kaise prepared to proceed karein|kaise done to proceed karein|kaise complete to proceed karein|kaise finished to proceed karein|kaise wrapped up to proceed karein|kaise sorted to proceed karein|kaise arranged to proceed karein|kaise organized to proceed karein|kaise managed to proceed karein|kaise handled to proceed karein|kaise taken care of to proceed karein|kaise set up to proceed karein|kaise in order to proceed karein|procedure kya hai|kya procedure hai|tareeka kya hai|kya tareeka hai|method kya hai|kya method hai|way kya hai|kya way hai|how-to|guide|tutorial|instructions|rules|terms|conditions|policy|agreement|contract|legal|fine print|small print|terms and conditions|privacy policy|refund policy|cancellation policy|support|help|contact|customer service|customer support|technical support|live chat|email|phone|address|location|hours|timings|availability|accessibility|requirements|prerequisites|eligibility|criteria|conditions|limitations|restrictions|boundaries|scope|range|extent|breadth|depth|width|height|length|size|dimension|scale|magnitude|agle steps|aage kya|aage kya karna hai|what's next|what to do next|what's the next step|what are the next steps|what's the next procedure|what's the next method|what's the next way|what's the next how-to|what's the next guide|what's the next tutorial|what's the next instructions|what's the next rules|what's the next terms|what's the next conditions|what's the next policy|what's the next agreement|what's the next contract|what's the next legal|what's the next fine print|what's the next small print|what's the next terms and conditions|what's the next privacy policy|what's the next refund policy|what's the next cancellation policy|what's the next support|what's the next help|what's the next contact|what's the next customer service|what's the next customer support|what's the next technical support|what's the next live chat|what's the next email|what's the next phone|what's the next address|what's the next location|what's the next hours|what's the next timings|what's the next availability|what's the next accessibility|what's the next requirements|what's the next prerequisites|what's the next eligibility|what's the next criteria|what's the next conditions|what's the next limitations|what's the next restrictions|what's the next boundaries|what's the next scope|what's the next range|what's the next extent|what's the next breadth|what's the next depth|what's the next width|what's the next height|what's the next length|what's the next size|what's the next dimension|what's the next scale|what's the next magnitude|I want to buy|I want to purchase|I want to get|I want to subscribe|I want to activate|I want to proceed|I want to go ahead|I want to start|I want to begin|I want to initiate|I want to commence|I want to embark|I want to undertake|I want to engage|I want to participate|I want to join|I want to enroll|I want to register|I want to sign up|I want to sign in|I want to log in|I want to log on|I want to access|I want to enter|I want to start using|I want to start enjoying|I want to start benefiting|I want to start experiencing|I want to start utilizing|I want to start leveraging|I want to start employing|I want to start applying|I want to start implementing|I want to start executing|I want to start operating|I want to start running|I want to start working|I want to start functioning|I want to start performing|I want to start acting|I want to start doing|I want to start making|I want to start creating|I want to start building|I want to start developing|I want to start designing|I want to start planning|I want to start organizing|I want to start managing|I want to start handling|I want to start taking care of|I want to start setting up|I want to start putting in order)$", re.IGNORECASE)
-
-# Inquire about Offers/Discounts
-OFFER_KEYWORDS = re.compile(
-    r"^(offer hai|discount|sasta nahi hoga|kuch kam hoga|price kam hoga|koi offer hai|discount milega|sasta karo|price reduce|kam paise|koi deal hai|cheaper|less price|can I get a discount|koi chhoot hai|offer chal raha hai|price negotiation|kam kar sakte ho|discounts available|any deals|special offer|price drop|sasta kar do|thoda kam karo|offer|offers|koi offer|koi offers|offers hain|offers chal rahe hain|discounts|koi discount|koi discounts|discounts milenge|sasta ho sakta hai|sasta milega|sasta mil sakta hai|kam kar do|kam hoga|kam ho sakta hai|kam price|price kam kar do|price kam ho sakta hai|price reduction|price drop|price cut|price down|price less|price lower|price low|price sasta|price cheap|price cheaper|price cheapest|price affordable|price economical|price budget|price friendly|price reasonable|price fair|price justified|price good|price best|price value|price worth|price deal|price offer|price discount|price special|price promotion|price sale|price clearance|price bargain|price markdown|deal|deals|koi deal|koi deals|deal chal rahi hai|deals chal rahe hain|special offers|promotion|promotions|sale|sales|bargain|bargains|chhoot|koi chhoot|chhoot milegi|chhoot mil sakti hai|chhoot hai|chhoot hain|rebate|rebate milega|rebate mil sakta hai|rebate hai|rebate hain|concession|concession milega|concession mil sakta hai|concession hai|concession hain|negotiation|price negotiation|can we negotiate|can we bargain|can we haggle|can we discuss price|can we talk about price|can we adjust price|can we modify price|can we alter price|can we change price|can we revise price|can we update price|can we upgrade price|can we improve price|can we enhance price|can we add to price|can we subtract from price|can we multiply price|can we divide price|can we calculate price|can we estimate price|can we quote price|can we provide price|can we offer price|can we present price|can we share price|can we explain price|can we describe price|can we elaborate on price|can we clarify price|can we shed light on price|can we enlighten me about price|can we make price clear|can we make price plain|can we make price explicit|can we make price obvious|can we make price apparent|can we make price evident|can we make price manifest|can we make price known|can we make price public|can we make price available|can we make price accessible|can we make price ready|can we make price prepared|can we make price set|can we make price done|can we make price complete|can we make price finished|can we make price wrapped up|can we make price sorted|can we make price arranged|can we make price organized|can we make price managed|can we make price handled|can we make price taken care of|can we make price set up|can we make price in order|kam kar sakte ho|thoda kam karo|thoda sasta karo|price thoda kam karo|price thoda sasta karo|kuch kam kar do|kuch sasta kar do|can you lower the price|can you reduce the price|can you drop the price|can you cut the price|can you make it cheaper|can you make it less expensive|can you make it more affordable|can you give me a better price|can you give me a lower price|can you give me a cheaper price|can you give me a discount|can you give me an offer|can you give me a deal|can you give me a special offer|can you give me a promotion|can you give me a sale|can you give me a bargain|can you give me a markdown)$", re.IGNORECASE)
-
-# Inquire about Free Trial
-FREE_TRIAL_KEYWORDS = re.compile(
-    r"^(free trial|try for free|demo|muft mein milega|free mein|free use|trial version|demo account|muft mein try|can I try it for free|free access|free premium|free mein premium|trial period|test it out|can I get a demo|free me chalega|free me nahi milega|free me de do|free me use kar sakte hain|muft|muft mein|sample|sample access|sample version|sample period|complimentary|complimentary access|complimentary version|complimentary period|gratis|gratis access|gratis version|gratis period|no cost|zero cost|no charge|zero charge|no fees|zero fees|no payment|zero payment|no money|zero money|no price|zero price|no cost access|zero cost access|no charge access|zero charge access|no fees access|zero fees access|no payment access|zero payment access|no money access|zero money access|no price access|zero price access|try it for free|try it out for free|test for free|test it for free|test it out for free|use for free|use it for free|use it out for free|access for free|access it for free|access it out for free|get for free|get it for free|get it out for free|can I try it out for free|can I test for free|can I test it for free|can I test it out for free|can I use for free|can I use it for free|can I use it out for free|can I access for free|can I access it for free|can I access it out for free|can I get for free|can I get it for free|can I get it out for free|premium free|premium free mein|premium muft mein|premium ka free trial|premium ka trial|premium ka demo|premium ka sample|premium ka complimentary|premium ka gratis|premium ka no cost|premium ka zero cost|premium ka no charge|premium ka zero charge|premium ka no fees|premium ka zero fees|premium ka no payment|premium ka zero payment|premium ka no money|premium ka zero money|premium ka no price|premium ka zero price|muft mein chalega|muft mein nahi milega|muft mein de do|muft mein use kar sakte hain|muft mein access milega|muft mein try kar sakte hain|muft mein test kar sakte hain|muft mein use kar sakte hain|muft mein access le sakte hain|muft mein get kar sakte hain|muft mein prapt kar sakte hain|muft mein hasil kar sakte hain|muft mein pa sakte hain|muft mein le sakte hain|muft mein kharid sakte hain|muft mein purchase kar sakte hain|muft mein buy kar sakte hain|muft mein subscribe kar sakte hain|muft mein activate kar sakte hain|muft mein get kar sakte hain|muft mein prapt kar sakte hain|muft mein hasil kar sakte hain|muft mein pa sakte hain)$", re.IGNORECASE)
-
-# Chosen 199/- Monthly
-PLAN_199_KEYWORDS = re.compile(
-    r"^(199|monthly|pehla wala|first one|single month|ek mahina|1 month|199 wala|ek mahine ka|first plan|monthly plan|199 rupees|one month plan|the first option|pehla option|monthly subscription|1 month subscription|Rs 199|199 only|short term|ek mahine ka pack|199/-|199 rs|199 rupees|199 only|199 ka|199 rupees ka|199 wala plan|199 rupees wala plan|199 ka plan|199 rupees ka plan|199 per month|199 for a month|199 for one month|199 for single month|199 for 1 month|199 for ek mahina|199 for one mahina|199 for single mahina|199 for 1 mahina|199 ka monthly|199 ka per month|199 ka for a month|199 ka for one month|199 ka for single month|199 ka for 1 month|199 ka for ek mahina|199 ka for one mahina|199 ka for single mahina|199 ka for 1 mahina|monthly pack|monthly option|monthly choice|monthly deal|monthly offer|monthly package|monthly bundle|monthly scheme|monthly program|monthly service|monthly product|monthly offering|monthly solution|monthly answer|monthly key|monthly secret|monthly magic|monthly trick|monthly formula|monthly recipe|monthly method|monthly process|monthly procedure|monthly step|monthly guideline|monthly instruction|monthly rule|monthly principle|monthly concept|monthly idea|monthly thought|monthly notion|monthly belief|monthly opinion|monthly view|monthly perspective|monthly angle|monthly side|monthly aspect|monthly facet|monthly dimension|monthly element|monthly component|monthly part|monthly section|monthly category|monthly type|monthly kind|monthly sort|monthly variety|monthly form|monthly version|monthly edition|monthly release|monthly update|monthly upgrade|monthly improvement|monthly enhancement|monthly addition|monthly change|monthly modification|monthly alteration|monthly revision|first choice|first deal|first offer|first package|first bundle|first scheme|first program|first service|first product|first offering|first solution|first answer|first key|first secret|first magic|first trick|first formula|first recipe|first method|first process|first procedure|first step|first guideline|first instruction|first rule|first principle|first concept|first idea|first thought|first notion|first belief|first opinion|first view|first perspective|first angle|first side|first aspect|first facet|first dimension|first element|first component|first part|first section|first category|first type|first kind|first sort|first variety|first form|first version|first edition|first release|first update|first upgrade|first improvement|first enhancement|first addition|first change|first modification|first alteration|first revision|short duration|short period|short time|short validity|short expiry|short term plan|short term subscription|short term pack|short term option|short term choice|short term deal|short term offer|short term package|short term bundle|short term scheme|short term program|short term service|short term product|short term offering|short term solution|short term answer|short term key|short term secret|short term magic|short term trick|short term formula|short term recipe|short term method|short term process|short term procedure|short term step|short term guideline|short term instruction|short term rule|short term principle|short term concept|short term idea|short term thought|short term notion|short term belief|short term opinion|short term view|short term perspective|short term angle|short term side|short term aspect|short term facet|short term dimension|short term element|short term component|short term part|short term section|short term category|short term type|short term kind|short term sort|short term variety|short term form|short term version|short term edition|short term release|short term update|short term upgrade|short term improvement|short term enhancement|short term addition|short term change|short term modification|short term alteration|short term revision)$", re.IGNORECASE)
-
-# Chosen 399/- for 3 Months
-PLAN_399_KEYWORDS = re.compile(
-    r"^(399|3 months|teen mahine|doosra wala|second one|long term|3 mahine wala|399 wala|teen mahine ka|second plan|quarterly plan|399 rupees|three month plan|the second option|doosra option|3 month subscription|Rs 399|399 only|best value|long term plan|3 mahine ka pack|399/-|399 rs|399 rupees|399 only|399 ka|399 rupees ka|399 wala plan|399 rupees wala plan|399 ka plan|399 rupees ka plan|399 quarterly|399 for three months|399 for teen mahine|399 for 3 mahine|399 ka quarterly|399 ka for 3 months|399 ka for three months|399 ka for teen mahine|399 ka for 3 mahine|three months|teen mahine|quarterly pack|quarterly option|quarterly choice|quarterly deal|quarterly offer|quarterly package|quarterly bundle|quarterly scheme|quarterly program|quarterly service|quarterly product|quarterly offering|quarterly solution|quarterly answer|quarterly key|quarterly secret|quarterly magic|quarterly trick|quarterly formula|quarterly recipe|quarterly method|quarterly process|quarterly procedure|quarterly step|quarterly guideline|quarterly instruction|quarterly rule|quarterly principle|quarterly concept|quarterly idea|quarterly thought|quarterly notion|quarterly belief|quarterly opinion|quarterly view|quarterly perspective|quarterly angle|quarterly side|quarterly aspect|quarterly facet|quarterly dimension|quarterly element|quarterly component|quarterly part|quarterly section|quarterly category|quarterly type|quarterly kind|quarterly sort|quarterly variety|quarterly form|quarterly version|quarterly edition|quarterly release|quarterly update|quarterly upgrade|quarterly improvement|quarterly enhancement|quarterly addition|quarterly change|quarterly modification|quarterly alteration|quarterly revision|second choice|second deal|second offer|second package|second bundle|second scheme|second program|second service|second product|second offering|second solution|second answer|second key|second secret|second magic|second trick|second formula|second recipe|second method|second process|second procedure|second step|second guideline|second instruction|second rule|second principle|second concept|second idea|second thought|second notion|second belief|second opinion|second view|second perspective|second angle|second side|second aspect|second facet|second dimension|second element|second component|second part|second section|second category|second type|second kind|second sort|second variety|second form|second version|second edition|second release|second update|second upgrade|second improvement|second enhancement|second addition|second change|second modification|second alteration|second revision|long duration|long period|long time|long validity|long expiry|long term plan|long term subscription|long term pack|long term option|long term choice|long term deal|long term offer|long term package|long term bundle|long term scheme|long term program|long term service|long term product|long term offering|long term solution|long term answer|long term key|long term secret|long term magic|long term trick|long term formula|long term recipe|long term method|long term process|long term procedure|long term step|long term guideline|long term instruction|long term rule|long term principle|long term concept|long term idea|long term thought|long term notion|long term belief|long term opinion|long term view|long term perspective|long term angle|long term side|long term aspect|long term facet|long term dimension|long term element|long term component|long term part|long term section|long term category|long term type|long term kind|long term sort|long term variety|long term form|long term version|long term edition|long term release|long term update|long term upgrade|long term improvement|long term enhancement|long term addition|long term change|long term modification|long term alteration|long term revision|value for money|good value|great value|better value|excellent value|superior value|premium value|high value|maximum value|optimal value|ideal value|perfect value|just right value|exactly right value|spot on value|on point value|good to go value|all right value|all good value|all clear value|all set value|all ready value|all prepared value|all done value|all complete value|all finished value|all wrapped up value|all sorted value|all arranged value|all organized value|all managed value|all handled value|all taken care of value|all set up value|all in order value|all ready to go value|all systems go value|all good to proceed value|all clear to proceed value|all set to proceed value|all ready to proceed value|all prepared to proceed value|all done to proceed value|all complete to proceed value|all finished to proceed value|all wrapped up to proceed value|all sorted to proceed value|all arranged to proceed value|all organized value|all managed value|all handled value|all taken care of value|all set up value|all in order to proceed value)$", re.IGNORECASE)
-
-# Unclear after plan selection / Confusion
-CONFUSION_KEYWORDS = re.compile(
-    r"^(kya karu|kaise|batao|idk|which one|you tell|kon sa lu|suggest karo|samajh nahi aa raha|help me choose|kya karna hai|what should I do|what do you recommend|you decide|mujhe nahi pata|confused which one|tell me what to pick|can't decide|which is better|help me decide|kya select karu|kya karna chahiye|what's next|what's the next step|what are the next steps|what's the next procedure|what's the next method|what's the next way|what's the next how-to|what's the next guide|what's the next tutorial|what's the next instructions|what's the next rules|what's the next terms|what's the next conditions|what's the next policy|what's the next agreement|what's the next contract|what's the next legal|what's the next fine print|what's the next small print|what's the next terms and conditions|what's the next privacy policy|what's the next refund policy|what's the next cancellation policy|what's the next support|what's the next help|what's the next contact|what's the next customer service|what's the next customer support|what's the next technical support|what's the next live chat|what's the next email|what's the next phone|what's the next address|what's the next location|what's the next hours|what's the next timings|what's the next availability|what's the next accessibility|what's the next requirements|what's the next prerequisites|what's the next eligibility|what's the next criteria|what's the next conditions|what's the next limitations|what's the next restrictions|what's the next boundaries|what's the next scope|what's the next range|what's the next extent|what's the next breadth|what's the next depth|what's the next width|what's the next height|what's the next length|what's the next size|what's the next dimension|what's the next scale|what's the next magnitude|kaise karu|kaise karna hai|how|how to|how to do|how to proceed|how to go ahead|how to start|how to begin|how to initiate|how to commence|how to embark|how to undertake|how to engage|how to participate|how to join|how to enroll|how to register|how to sign up|how to sign in|how to log in|how to log on|how to access|how to enter|how to start using|how to start enjoying|how to start benefiting|how to start experiencing|how to start utilizing|how to start leveraging|how to start employing|how to start applying|how to start implementing|how to start executing|how to start operating|how to start running|how to start working|how to start functioning|how to start performing|how to start acting|how to start doing|how to start making|how to start creating|how to start building|how to start developing|how to start designing|how to start planning|how to start organizing|how to start managing|how to start handling|how to start taking care of|how to start setting up|how to start putting in order|how to start getting ready|how to start preparing|how to start getting set|how to start getting done|how to start getting complete|how to start getting finished|how to start getting wrapped up|how to start getting sorted|how to start getting arranged|how to start getting organized|how to start getting managed|how to start getting handled|how to start taking care of|how to start setting up|how to start putting in order|bataiye|tell me|tell me what to do|tell me what's next|tell me what to choose|tell me what to pick|tell me what to select|tell me what to go with|tell me what to opt for|tell me what to decide|tell me what to recommend|tell me what to suggest|tell me what to advise|tell me what to guide|tell me what to instruct|tell me what to direct|tell me what to lead|tell me what to take|tell me what to bring|tell me what to give|tell me what to provide|tell me what to offer|tell me what to present|tell me what to share|tell me what to explain|tell me what to describe|tell me what to elaborate on|tell me what to clarify|tell me what to shed light on|tell me what to enlighten me|tell me what to make clear|tell me what to make plain|tell me what to make explicit|tell me what to make obvious|tell me what to make apparent|tell me what to make evident|tell me what to make manifest|tell me what to make known|tell me what to make public|tell me what to make available|tell me what to make accessible|tell me what to make ready|tell me what to make prepared|tell me what to make set|tell me what to make done|tell me what to make complete|tell me what to make finished|tell me what to make wrapped up|tell me what to make sorted|tell me what to make arranged|tell me what to make organized|tell me what to make managed|tell me what to make handled|tell me what to make taken care of|tell me what to make set up|tell me what to make in order|I don't know|mujhe nahi pata|mujhe nahi maloom|I have no idea|I have no clue|I'm unsure|I'm uncertain|I'm not sure|I'm not certain|I'm not clear|I'm not confident|I'm not convinced|I'm not decided|I'm not resolved|I'm not determined|I'm not fixed|I'm not definite|I'm not certain|I'm not sure|I'm not absolute|I'm not complete|I'm not full|I'm not total|I'm not entire|I'm not whole|I'm not comprehensive|I'm not extensive|I'm not broad|I'm not wide|I'm not deep|I'm not thorough|I'm not detailed|I'm not elaborate|I'm not precise|I'm not exact|I'm not strict|I'm not rigid|I'm not firm|I'm not tight|I'm not secure|I'm not safe|I'm not protected|I'm not guarded|I'm not shielded|I'm not screened|I'm not filtered|I'm not checked|I'm not validated|I'm not confirmed|I'm not approved|I'm not authorized|I'm not permitted|I'm not allowed|I'm not granted|I'm not given|I'm not provided|I'm not offered|I'm not presented|I'm not shared|I'm not explained|I'm not described|I'm not elaborated|I'm not clarified|I'm not shed light on|I'm not enlightened|I'm not made clear|I'm not made plain|I'm not made explicit|I'm not made obvious|I'm not made apparent|I'm not made evident|I'm not made manifest|I'm not made known|I'm not made public|I'm not made available|I'm not made accessible|I'm not made ready|I'm not made prepared|I'm not made set|I'm not made done|I'm not made complete|I'm not made finished|I'm not made wrapped up|I'm not made sorted|I'm not made arranged|I'm not made organized|I'm not made managed|I'm not made handled|I'm not made taken care of|I'm not made set up|I'm not made in order|kon sa|kon sa lu|which should I choose|which should I pick|which should I select|which should I go with|which should I opt for|which should I decide|which should I recommend|which should I suggest|which should I advise|which should I guide|which should I instruct|which should I direct|which should I lead|which should I take|which should I bring|which should I give|which should I provide|which should I offer|which should I present|which should I share|which should I explain|which should I describe|which should I elaborate on|which should I clarify|which should I shed light on|which should I enlighten me|which should I make clear|which should I make plain|which should I make explicit|which should I make obvious|which should I make apparent|which should I make evident|which should I make manifest|which should I make known|which should I make public|which should I make available|which should I make accessible|which should I make ready|which should I make prepared|which should I make set|which should I make done|which should I make complete|which should I make finished|which should I make wrapped up|which should I make sorted|which should I make arranged|which should I make organized|which should I make managed|which should I make handled|which should I make taken care of|which should I make set up|which should I make in order|recommend karo|advise karo|guide karo|help me pick|help me select|help me go with|help me opt for|help me decide|help me recommend|help me suggest|help me advise|help me guide|help me instruct|help me direct|help me lead|help me take|help me bring|help me give|help me provide|help me offer|help me present|help me share|help me explain|help me describe|help me elaborate on|help me clarify|help me shed light on|help me enlighten me|help me make clear|help me make plain|help me make explicit|help me make obvious|help me make apparent|help me make evident|help me make manifest|help me make known|help me make public|help me make available|help me make accessible|help me make ready|help me make prepared|help me make set|help me make done|help me make complete|help me make finished|help me make wrapped up|help me make sorted|help me make arranged|help me make organized|help me make managed|help me make handled|help me make taken care of|help me make set up|help me make in order|samajh nahi aa rahi|I'm not understanding|I'm bewildered|I'm perplexed|I'm puzzled|I'm stumped|I'm stuck|I'm at a loss|I'm in a quandary|I'm in a dilemma|I'm in a fix|I'm in a pickle|I'm in a bind|I'm in a tight spot|I'm in a difficult situation|I'm in a tough spot|I'm in a tricky situation|I'm in a complex situation|I'm in a complicated situation|I'm in a convoluted situation|I'm in a perplexing situation|I'm in a puzzling situation|I'm in a bewildering situation|I'm in a confusing situation|I'm in a difficult position|I'm in a tough position|I'm in a tricky position|I'm in a complex position|I'm in a complicated position|I'm in a convoluted position|I'm in a perplexing position|I'm in a puzzling position|I'm in a bewildering position|I'm in a confusing position|bahut confusing hai|this is confusing|it's confusing|too confusing|very confusing|extremely confusing|highly confusing|utterly confusing|totally confusing|completely confusing|absolutely confusing|surely confusing|certainly confusing|truly confusing|genuinely confusing|really confusing|quite confusing|rather confusing|somewhat confusing|a bit confusing|a little confusing|slightly confusing|partially confusing|mostly confusing|largely confusing|generally confusing|usually confusing|often confusing|frequently confusing|regularly confusing|constantly confusing|always confusing|forever confusing|perpetually confusing|eternally confusing|endlessly confusing|infinitely confusing|boundlessly confusing|limitlessly confusing|unrestrictedly confusing|unreservedly confusing|unhesitatingly confusing|unthinkingly confusing|unreflectingly confusing|unpausingly confusing|unstoppingly confusing|unceasingly confusing|unendingly confusing|unfailingly confusing|unfalteringly confusing|unswervingly confusing|unyieldingly confusing|unremittingly confusing|unflaggingly confusing|untiringly confusing|unwearyingly confusing|ugh|argh|oh no|oh my god|oh my goodness|oh dear|oh well|oh bother|oh crumbs|oh shoot|oh fudge|oh snap|oh rats|oh darn|oh blast|oh heck|oh geez|oh man|oh boy|oh girl|oh wow|oh my|oh dear me|oh goodness gracious|oh heavens|oh lord|oh buddha|oh krishna|oh ram|oh shiva|oh allah|oh god|oh creator|oh universe|oh cosmos|oh existence|oh life|oh soul|oh spirit|oh essence|oh core|oh heart|oh mind|oh body|oh self|oh ego|oh id|oh superego|oh consciousness|oh subconsciousness|oh unconsciousness|oh awareness|oh perception|oh cognition|oh thought|oh idea|oh notion|oh belief|oh opinion|oh view|oh perspective|oh angle|oh side|oh aspect|oh facet|oh dimension|oh element|oh component|oh part|oh section|oh category|oh type|oh kind|oh sort|oh variety|oh form|oh version|oh edition|oh release|oh update|oh upgrade|oh improvement|oh enhancement|oh addition|oh change|oh modification|oh alteration|oh revision|pata nahi kya karu|I don't know what to do|what should I do|what to do next|what's the next step|what are the next steps|what's the next procedure|what's the next method|what's the next way|what's the next how-to|what's the next guide|what's the next tutorial|what's the next instructions|what's the next rules|what's the next terms|what's the next conditions|what's the next policy|what's the next agreement|what's the next contract|what's the next legal|what's the next fine print|what's the next small print|what's the next terms and conditions|what's the next privacy policy|what's the next refund policy|what's the next cancellation policy|what's the next support|what's the next help|what's the next contact|what's the next customer service|what's the next customer support|what's the next technical support|what's the next live chat|what's the next email|what's the next phone|what's the next address|what's the next location|what's the next hours|what's the next timings|what's the next availability|what's the next accessibility|what's the next requirements|what's the next prerequisites|what's the next eligibility|what's the next criteria|what's the next conditions|what's the next limitations|what's the next restrictions|what's the next boundaries|what's the next scope|what's the next range|what's the next extent|what's the next breadth|what's the next depth|what's the next width|what's the next height|what's the next length|what's the next size|what's the next dimension|what's the next scale|what's the next magnitude|frustrated|dimag kharab ho raha hai|sar dard ho raha hai|I'm annoyed|I'm irritated|I'm exasperated|I'm fed up|I'm sick of it|I'm tired of it|I'm done with it|I'm over it|I'm at my wit's end|I'm at my breaking point|I'm at my limit|I'm at my maximum|I'm at my peak|I'm at my top|I'm at my highest|I'm at my utmost|I'm at my supreme|I'm at my paramount|I'm at my leading|I'm at my foremost|I'm at my preeminent|I'm at my dominant|I'm at my prevailing|I'm at my prevalent|I'm at my common|I'm at my widespread|I'm at my universal|I'm at my global|I'm at my international|I'm at my national|I'm at my regional|I'm at my local|I'm at my personal|I'm at my individual|I'm at my private|I'm at my public|I'm at my corporate|I'm at my business|I'm at my organizational|I'm at my institutional|I'm at my governmental|I'm at my legal|I'm at my regulatory|I'm at my compliance|I'm at my security|I'm at my safety|I'm at my privacy|I'm at my data|I'm at my information|I'm at my identity|I'm at my user|I'm at my account|I'm at my transaction|I'm at my payment|I'm at my system|I'm at my network|I'm at my server|I'm at my database|I'm at my storage|I'm at my memory|I'm at my CPU|I'm at my GPU|I'm at my battery|I'm at my power|I'm at my display|I'm at my screen|I'm at my touch|I'm at my sound|I'm at my audio|I'm at my video|I'm at my camera|I'm at my microphone|I'm at my sensor|I'm at my GPS|I'm at my location|I'm at my connectivity|I'm at my internet|I'm at my wifi|I'm at my bluetooth|I'm at my mobile data|I'm at my cellular|can't figure it out|cannot figure it out|unable to figure it out|can't understand|cannot understand|unable to understand|can't comprehend|cannot comprehend|unable to comprehend|can't grasp|cannot grasp|unable to grasp|can't make sense of it|cannot make sense of it|unable to make sense of it|can't solve it|cannot solve it|unable to solve it|can't resolve it|cannot resolve it|unable to resolve it|can't fix it|cannot fix it|unable to fix it|can't repair it|cannot repair it|unable to repair it|can't mend it|cannot mend it|unable to mend it|can't correct it|cannot correct it|unable to correct it|can't rectify it|cannot rectify it|unable to rectify it|can't set it right|cannot set it right|unable to set it right|can't put it right|cannot put it right|unable to put it right|can't make it right|cannot make it right|unable to make it right|can't get it right|cannot get it right|unable to get it right|can't do it right|cannot do it right|unable to do it right|can't perform it right|cannot perform it right|unable to perform it right|can't act right|cannot act right|unable to act right|can't function right|cannot function right|unable to function right|can't operate right|cannot operate right|unable to operate right|can't run right|cannot run right|unable to run right|can't work right|cannot work right|unable to work right|can't proceed right|cannot proceed right|unable to proceed right|can't go ahead right|cannot go ahead right|unable to go ahead right|can't start right|cannot start right|unable to start right|can't begin right|cannot begin right|unable to begin right|can't initiate right|cannot initiate right|unable to initiate right|can't commence right|cannot commence right|unable to commence right|can't embark right|cannot embark right|unable to embark right|can't undertake right|cannot undertake right|unable to undertake right|can't engage right|cannot engage right|unable to engage right|can't participate right|cannot participate right|unable to participate right|can't join right|cannot join right|unable to join right|can't enroll right|cannot enroll right|unable to enroll right|can't register right|cannot register right|unable to register right|can't sign up right|cannot sign up right|unable to sign up right|can't sign in right|cannot sign in right|unable to sign in right|can't log in right|cannot log in right|unable to log in right|can't log on right|cannot log on right|unable to log on right|can't access right|cannot access right|unable to access right|can't enter right|cannot enter right|unable to enter right|can't start using right|cannot start using right|unable to start using right|can't start enjoying right|cannot start enjoying right|unable to start enjoying right|can't start benefiting right|cannot start benefiting right|unable to start benefiting right|can't start experiencing right|cannot start experiencing right|unable to start experiencing right|can't start utilizing right|cannot start utilizing right|unable to start utilizing right|can't start leveraging right|cannot start leveraging right|unable to start leveraging right|can't start employing right|cannot start employing right|unable to start employing right|can't start applying right|cannot start applying right|unable to start applying right|can't start implementing right|cannot start implementing right|unable to start implementing right|can't start executing right|cannot start executing right|unable to start executing right|can't start operating right|cannot start operating right|unable to operate right|can't start running right|cannot start running right|unable to run right|can't start working right|cannot start working right|unable to work right|can't start functioning right|cannot start functioning right|unable to function right|can't start performing right|cannot start performing right|unable to perform right|can't start acting right|cannot act right|unable to act right|can't start doing right|cannot do it right|unable to do it right|can't start making right|cannot make it right|unable to make it right|can't start creating right|cannot create it right|unable to create it right|can't start building right|cannot build it right|unable to build it right|can't start developing right|cannot develop it right|unable to develop it right|can't start designing right|cannot design it right|unable to design it right|can't start planning right|cannot plan it right|unable to plan it right|can't start organizing right|cannot organize it right|unable to organize it right|can't start managing right|cannot manage it right|unable to manage it right|can't start handling right|cannot handle it right|unable to handle it right|can't start taking care of right|cannot take care of it right|unable to take care of it right|can't start setting up right|cannot set it up right|unable to set it up right|can't start putting in order right|cannot put it in order right|unable to put it in order right|can't start getting ready right|cannot get ready right|unable to get ready right|can't start preparing right|cannot prepare right|unable to prepare right|can't start getting set right|cannot get set right|unable to get set right|can't start getting done right|cannot get done right|unable to get done right|can't start getting complete right|cannot get complete right|unable to get complete right|can't start getting finished right|cannot get finished right|unable to get finished right|can't start getting wrapped up right|cannot get wrapped up right|unable to get wrapped up right|can't start getting sorted right|cannot get sorted right|unable to get sorted right|can't start getting arranged right|cannot get arranged right|unable to get arranged right|can't start getting organized right|cannot get organized right|unable to get organized right|can't start getting managed right|cannot get managed right|unable to get managed right|can't start getting handled right|cannot get handled right|unable to get handled right|can't start getting taken care of right|cannot get taken care of right|unable to get taken care of right|can't start setting up right|cannot set up right|unable to set up right|can't start putting in order right|cannot put in order right|unable to put in order right)$", re.IGNORECASE)
-
-# Payment Method Inquiry (after plan selection, before verification)
-PAYMENT_METHOD_INQUIRY_KEYWORDS = re.compile(
-    r"^(kaise pay karu|payment options|UPI hai|card se hoga|net banking|payment kaise hogi|payment method|online payment|pay kaise karein|how to make payment|what payment methods|can I pay with UPI|card payment|bank transfer options|how to complete payment|payment details|payment ke tareeke|pay karne ka option|kaise pay karein|kaise payment karu|kaise payment karein|how to send payment|how to transfer payment|how to process payment|how to handle payment|how to manage payment|how to arrange payment|how to organize payment|how to set up payment|how to put in order payment|how to get ready payment|how to prepare payment|how to get set payment|how to get done payment|how to get complete payment|how to get finished payment|how to get wrapped up payment|how to get sorted payment|how to get arranged payment|how to get organized payment|how to get managed payment|how to get handled payment|how to get taken care of payment|how to get set up payment|how to get in order payment|payment methods|payment tareeke|payment ways|payment modes|payment types|payment kinds|payment sorts|payment varieties|payment forms|payment versions|payment editions|payment releases|payment updates|payment upgrades|payment improvements|payment enhancements|payment additions|payment changes|payment modifications|payment alterations|payment revisions|UPI se hoga|UPI se pay kar sakte hain|UPI payment|UPI transfer|UPI option|UPI method|UPI way|UPI mode|UPI type|UPI kind|UPI sort|UPI variety|UPI form|UPI version|UPI edition|UPI release|UPI update|UPI upgrade|UPI improvement|UPI enhancement|UPI addition|UPI change|UPI modification|UPI alteration|UPI revision|card se pay kar sakte hain|card payment|card option|card method|card way|card mode|card type|card kind|card sort|card variety|card form|card version|card edition|card release|card update|card upgrade|card improvement|card enhancement|card addition|card change|card modification|card alteration|card revision|internet banking|online banking|bank transfer|wire transfer|NEFT|RTGS|IMPS|UPI transfer|bank to bank transfer|direct bank transfer|account transfer|fund transfer|money transfer|electronic transfer|digital transfer|online transfer|mobile transfer|instant transfer|quick transfer|fast transfer|secure transfer|safe transfer|reliable transfer|trusted transfer|verified transfer|authenticated transfer|authorized transfer|approved transfer|valid transfer|active transfer|working transfer|functional transfer|operational transfer|usable transfer|accessible transfer|available transfer|ready transfer|prepared transfer|set transfer|done transfer|complete transfer|finished transfer|wrapped up transfer|sorted transfer|arranged transfer|organized transfer|managed transfer|handled transfer|taken care of transfer|set up transfer|in order transfer|payment info|payment information|payment jaankari|payment jankari|poori payment jaankari|complete payment info|full payment details|more payment info|more payment details|tell me payment details|explain payment details|elaborate payment details|clarify payment details|give me payment details|give me payment info|give me payment information|provide payment details|provide payment info|provide payment information|can you tell me payment details|can you explain payment details|can you elaborate payment details|can you clarify payment details|can you give me payment details|can you give me payment info|can you give me payment information|I want to know payment details|I want to know payment info|I want to know payment information|I want to know about payment methods|I want to know about payment options|I want to know about payment process|I want to know about payment procedure|I want to know about payment steps|I want to know about payment tareeke|I want to know about payment ways|payment modes|payment types|payment kinds|payment sorts|payment varieties|payment forms|payment versions|payment editions|payment releases|payment updates|payment upgrades|payment improvements|payment enhancements|payment additions|payment changes|payment modifications|payment alterations|payment revisions)$", re.IGNORECASE)
-
-# Rejection/Disinterest
-NO_KEYWORDS = re.compile(
-    r"^(no|nahi|na|not now|rehne do|abhi nahi|no thanks|not interested|man nahi hai|baad mein|pass|skip|don't want|not today|cancel|leave it|no need|nahi chahiye|no, I don't want|filhal nahi|abhi nahi lena|no thank you|naa|na baba|na ji|na re|na yaar|na bhai|na behen|na dost|na jaan|na cutie|na sweetheart|na darling|na love|na honey|na sweetie|na babu|na shona|na sona|na jaaneman|na dilbar|na mehboob|na hamsafar|na humsafar|na jeevansathi|na saathi|na partner|na friend|na buddy|na pal|na mate|na chum|na comrade|na companion|na associate|na colleague|na peer|na counterpart|na fellow|na individual|na person|na human|na being|na creature|na entity|na existence|na life|na soul|na spirit|na essence|na core|na heart|na mind|na body|na self|na ego|na id|na superego|na consciousness|na subconsciousness|na unconsciousness|na awareness|na perception|na cognition|na thought|na idea|na notion|na belief|na opinion|na view|na perspective|na angle|na side|na aspect|na facet|na dimension|na element|na component|na part|na section|na category|na type|na kind|na sort|na variety|na form|na version|na edition|na release|na update|na upgrade|na improvement|na enhancement|na addition|na change|na modification|na alteration|na revision|not right now|not at this moment|not at this time|not at present|not currently|not presently|not immediately|not instantly|not at once|not straight away|not right away|not just yet|not yet|not for now|not for the time being|not for the moment|not for the present|not for the current|not for the immediate|not for the instant|not for the quick|not for the fast|not for the rapid|not for the swift|not for the speedy|not for the prompt|not for the timely|not for the early|not for the late|not for the soon|not for the later|not for the future|not for the past|rehne do|chhodo|jaane do|let it be|forget it|never mind|don't bother|don't worry|it's okay|it's fine|it's alright|it's good|it's great|it's perfect|it's cool|it's awesome|it's amazing|it's fantastic|it's wonderful|it's nice|it's right|it's correct|it's accurate|it's valid|it's legit|it's real|it's true|it's genuine|it's authentic|it's proper|it's fitting|it's suitable|it's appropriate|it's ideal|it's perfect|it's just right|it's exactly right|it's spot on|it's on point|it's good to go|it's all right|it's all good|it's all clear|it's all set|it's all ready|it's all prepared|it's all done|it's all complete|it's all finished|it's all wrapped up|it's all sorted|it's all arranged|it's all organized|it's all managed|it's all handled|it's all taken care of|it's all set up|it's all in order|man nahi hai|mood nahi hai|dil nahi hai|iccha nahi hai|chahat nahi hai|pasand nahi hai|ruchi nahi hai|dilchaspi nahi hai|shauq nahi hai|lagan nahi hai|utsah nahi hai|josh nahi hai|junoon nahi hai|jazba nahi hai|bhavna nahi hai|anubhav nahi hai|ehsaas nahi hai|pratikriya nahi hai|abhipray nahi hai|tatparya nahi hai|arth nahi hai|matlab nahi hai|bhav nahi hai|aashay nahi hai|sanket nahi hai|ishara nahi hai|nirdesh nahi hai|aadesh nahi hai|hukm nahi hai|farmaan nahi hai|niyam nahi hai|kanoon nahi hai|vidhan nahi hai|adhinium nahi hai|upaniyam nahi hai|niyamavali nahi hai|vidhi nahi hai|paddhati nahi hai|tareeka nahi hai|dhang nahi hai|shaili nahi hai|roop nahi hai|prakar nahi hai|kisam nahi hai|bhed nahi hai|varg nahi hai|shreni nahi hai|samuh nahi hai|dal nahi hai|jhund nahi hai|gathbandhan nahi hai|sangathan nahi hai|sanstha nahi hai|vibhag nahi hai|shakha nahi hai|upashakha nahi hai|upavibhag nahi hai|baad mein|later|later on|sometime later|sometime else|another time|next time|in the future|at a later date|at a later time|at a future date|at a future time|when I'm ready|when I'm free|when I have time|when I have money|when I have resources|when I have energy|when I have mood|when I have desire|when I have interest|when I have passion|when I have enthusiasm|when I have zeal|when I have spirit|when I have feeling|when I have emotion|when I have sensation|when I have perception|when I have cognition|when I have thought|when I have idea|when I have notion|when I have belief|when I have opinion|when I have view|when I have perspective|when I have angle|when I have side|when I have aspect|when I have facet|when I have dimension|when I have element|when I have component|when I have part|when I have section|when I have category|when I have type|when I have kind|when I have sort|when I have variety|when I have form|when I have version|when I have edition|when I have release|when I have update|when I have upgrade|when I have improvement|when I have enhancement|when I have addition|when I have change|when I have modification|when I have alteration|when I have revision|skip|cancel|don't want|no need|nahi lena|nahi kharidna|nahi purchase karna|nahi buy karna|nahi subscribe karna|nahi activate karna|nahi get karna|nahi prapt karna|nahi hasil karna|nahi paana|nahi le lena|nahi kharid lena|nahi purchase kar lena|nahi buy kar lena|nahi subscribe kar lena|nahi activate kar lena|nahi get kar lena|nahi prapt kar lena|nahi hasil kar lena|nahi pa lena)$", re.IGNORECASE)
-
-# General Help/Info
-GENERAL_HELP_KEYWORDS = re.compile(
-    r"^(help|info|details|kya chal raha hai|kuch batao|explain|what's happening|guide me|aur jaankari|can you help|I need help|what can you do|tell me more|give me information|what's going on|kya ho raha hai|kya baat hai|kya information hai|kuch aur jaanna hai|can you assist|help me|I need assistance|can you provide assistance|support|support me|I need support|can you provide support|guide|I need guidance|can you provide guidance|direct|direct me|I need direction|can you provide direction|lead|lead me|I need leadership|can you provide leadership|show me|show me the way|show me how|show me what to do|show me what's next|show me what's the matter|show me what's the issue|show me what's the problem|show me what's the situation|show me what's the case|show me what's the scenario|show me what's the condition|show me what's the state|show me what's the status|show me what's the progress|show me what's the development|show me what's the advancement|show me what's the evolution|show me what's the growth|show me what's the improvement|show me what's the enhancement|show me what's the addition|show me what's the change|show me what's the modification|show me what's the alteration|show me what's the revision|information|jaankari|jankari|poori jaankari|complete info|full details|more info|more details|tell me more|explain more|elaborate|clarify|give me details|give me info|give me information|provide details|provide info|provide information|can you tell me more|can you explain more|can you elaborate|can you clarify|can you give me details|can you give me info|can you give me information|I want to know more|I want to know details|I want to know info|I want to know information|I want to know about|I want to know about this|I want to know about that|I want to know about everything|I want to know about anything|I want to know about something|I want to know about nothing|I want to know about the topic|I want to know about the subject|I want to know about the matter|I want to know about the issue|I want to know about the problem|I want to know about the situation|I want to know about the case|I want to know about the scenario|I want to know about the condition|I want to know about the state|I want to know about the status|I want to know about the progress|I want to know about the development|I want to know about the advancement|I want to know about the evolution|I want to know about the growth|I want to know about the improvement|I want to know about the enhancement|I want to know about the addition|I want to know about the change|I want to know about the modification|I want to know about the alteration|I want to know about the revision|what's up|wassup|what's new|kuch khaas|anything special|anything new|anything interesting|anything exciting|anything important|anything urgent|anything relevant|anything significant|anything noteworthy|anything remarkable|anything extraordinary|anything exceptional|anything outstanding|anything phenomenal|anything magnificent|anything splendid|anything glorious|anything brilliant|anything dazzling|anything radiant|anything shining|anything sparkling|anything glittering|anything shimmering|anything gleaming|anything glowing|anything luminous|anything incandescent|anything resplendent|anything effulgent|anything refulgent|anything lustrous|anything polished|anything refined|anything elegant|anything graceful|anything charming|anything delightful|anything pleasing|anything agreeable|anything pleasant|anything enjoyable|anything lovely|anything beautiful|anything pretty|anything handsome|anything attractive|anything appealing|anything captivating|anything enchanting|anything fascinating|anything mesmerizing|anything spellbinding|anything enthralling|anything intriguing|anything interesting|anything engaging|anything stimulating|anything thought-provoking|anything inspiring|anything motivating|anything encouraging|anything uplifting|anything comforting|anything reassuring|anything soothing|anything calming|anything relaxing|anything peaceful|anything tranquil|anything serene|anything blissful|anything joyful|anything cheerful|anything happy|anything merry|anything jolly|anything gleeful|anything ecstatic|anything elated|anything jubilant|anything exultant|anything triumphant|anything victorious|anything successful|anything prosperous|anything flourishing|anything thriving|anything blooming|anything blossoming|anything growing|anything developing|anything advancing|anything progressing|anything evolving|anything improving|anything enhancing|anything adding|anything changing|anything modifying|anything altering|anything revising)$", re.IGNORECASE)
-
-# Cancellation/Refunds
-CANCEL_REFUND_KEYWORDS = re.compile(
-    r"^(cancel kaise karein|refund milega|subscription kaise band karein|paise wapas milenge|cancel subscription|refund process|subscription band karna hai|paise wapas|how to cancel|can I get a refund|how to stop subscription|money back|cancellation policy|refund policy|subscription end|band karna hai|cancel karna hai|refund ke bare mein|paise wapas milenge kya|cancel|cancel my subscription|cancel the subscription|cancel premium|cancel my premium|cancel the premium|cancel my plan|cancel the plan|cancel my account|cancel the account|cancel my service|cancel the service|cancel my product|cancel the product|cancel my offering|cancel the offering|cancel my solution|cancel the solution|cancel my answer|cancel the answer|cancel my key|cancel the key|cancel my secret|cancel the secret|cancel my magic|cancel the magic|cancel my trick|cancel the trick|cancel my formula|cancel the formula|cancel my recipe|cancel the recipe|cancel my method|cancel the method|cancel my process|cancel the process|cancel my procedure|cancel the procedure|cancel my step|cancel the step|cancel my guideline|the guideline|cancel my instruction|cancel the instruction|cancel my rule|cancel the rule|cancel my principle|cancel the principle|cancel my concept|cancel the concept|cancel my idea|cancel the idea|cancel my thought|cancel the thought|cancel my notion|cancel the notion|cancel my belief|cancel the belief|cancel my opinion|cancel the opinion|cancel my view|cancel the view|cancel my perspective|cancel the perspective|cancel my angle|cancel the angle|cancel my side|cancel the side|cancel my aspect|cancel the aspect|cancel my facet|cancel the facet|cancel my dimension|cancel the dimension|cancel my element|cancel the element|cancel my component|cancel the component|cancel my part|cancel my section|cancel the section|cancel my category|cancel the category|cancel my type|cancel the type|cancel my kind|cancel the kind|cancel my sort|cancel the sort|cancel my variety|cancel my form|cancel my version|cancel my edition|cancel my release|cancel my update|cancel the update|cancel my upgrade|cancel the upgrade|cancel my improvement|cancel the improvement|cancel my enhancement|cancel the enhancement|cancel my addition|cancel the addition|cancel my change|cancel the change|cancel my modification|cancel the modification|cancel my alteration|cancel the alteration|cancel my revision|cancel the revision|refund process|refund policy|money back|paise wapas|paise wapas milenge|paise wapas milenge kya|refund ke bare mein|refund ke baare mein batao|refund ke baare mein jaanna hai|refund ke baare mein bol|refund ke baare mein detail|refund ke baare mein info|refund ke baare mein explain karo|refund ke baare mein samjhao|refund ke baare mein jankari do|refund ke baare mein bataiye|refund ke baare mein bolna|refund ke baare mein kuch batao|refund ke baare mein sab kuch|refund ke baare mein poori jaankari|refund ke baare mein complete info|full refund details|more refund info|more refund details|tell me refund details|explain refund details|elaborate refund details|clarify refund details|give me refund details|give me refund info|give me refund information|provide refund details|provide refund info|provide refund information|can you tell me refund details|can you explain refund details|can you elaborate refund details|can you clarify refund details|can you give me refund details|can you give me refund info|can you give me refund information|I want to know refund details|I want to know refund info|I want to know refund information|I want to know about refund methods|I want to know about refund options|I want to know about refund process|I want to know about refund procedure|I want to know about refund steps|I want to know about refund tareeke|I want to know about refund ways|refund modes|refund types|refund kinds|refund sorts|refund varieties|refund forms|refund versions|refund editions|refund releases|refund updates|refund upgrades|refund improvements|refund enhancements|refund additions|refund changes|refund modifications|refund alterations|refund revisions|subscription band karna hai|how to stop subscription|end subscription|close subscription|discontinue subscription|terminate subscription|deactivate subscription|remove subscription|delete subscription|stop subscription|stop my subscription|stop the subscription|stop premium|stop my premium|stop the premium|stop my plan|stop the plan|stop my account|stop the account|stop my service|stop the service|stop my product|stop the product|stop my offering|stop the offering|stop my solution|stop the solution|stop my answer|stop the answer|stop my key|stop the key|stop my secret|stop the secret|stop my magic|stop the magic|stop my trick|stop the trick|stop my formula|stop the formula|stop my recipe|stop the recipe|stop my method|stop the method|stop my process|stop the process|stop my procedure|stop the procedure|stop my step|stop the step|stop my guideline|stop the guideline|stop my instruction|stop the instruction|stop my rule|stop the rule|stop my principle|stop the principle|stop my concept|stop the concept|stop my idea|stop the idea|stop my thought|stop the thought|stop my notion|stop the notion|stop my belief|stop the belief|stop my opinion|stop the opinion|stop my view|stop the view|stop my perspective|stop the perspective|stop my angle|stop the angle|stop my side|stop the side|stop my aspect|stop the aspect|stop my facet|stop the facet|stop my dimension|stop the dimension|stop my element|stop the element|stop my component|stop the component|stop my part|stop the part|stop my section|stop the section|stop my category|stop the category|stop my type|stop the type|stop my kind|stop the kind|stop my sort|stop the sort|stop my variety|stop my form|stop my version|stop my edition|stop my release|stop my update|stop my upgrade|stop my improvement|stop my enhancement|stop my addition|stop my change|stop my modification|stop my alteration|stop my revision)$", re.IGNORECASE)
-
-# Technical Issue
-TECHNICAL_ISSUE_KEYWORDS = re.compile(
-    r"^(error aa raha hai|not working|problem ho rahi hai|issue hai|app crash|bug|technical problem|glitch|chal nahi raha|something is wrong|it's broken|facing an issue|technical error|app not responding|stuck|kuch gadbad hai|problem aa rahi hai|issue ho gaya|error hai|error|error ho raha hai|error show ho raha hai|error dikha raha hai|error message|error code|error notification|error alert|error warning|error sign|error indication|error symptom|error signal|error flag|error mark|error point|error spot|error location|error position|error place|error area|error region|error zone|error sector|error segment|error part|error section|error category|error type|error kind|error sort|error variety|error form|error version|error edition|error release|error update|error upgrade|error improvement|error enhancement|error addition|error change|error modification|error alteration|error revision|not functioning|not operating|not running|not performing|not acting|not doing|not making|not creating|not building|not developing|not designing|not planning|not organizing|not managing|not handling|not taking care of|not setting up|not putting in order|not getting ready|not preparing|not getting set|not getting done|not getting complete|not getting finished|not getting wrapped up|not getting sorted|not getting arranged|not getting organized|not getting managed|not getting handled|not getting taken care of|not setting up|not putting in order|problem|problem ho rahi hai|problem aa rahi hai|issue|issue hai|issue ho gaya|technical issue|technical glitch|technical bug|technical fault|technical defect|technical malfunction|technical breakdown|technical failure|technical difficulty|technical challenge|technical hurdle|technical obstacle|technical impediment|technical hindrance|technical obstruction|technical blockage|technical barrier|technical limitation|technical restriction|technical boundary|technical scope|technical range|technical extent|technical breadth|technical depth|technical width|technical height|technical length|technical size|technical dimension|technical scale|technical magnitude|app not responding|app stuck|app frozen|app hanging|app slow|app lagging|app glitching|app bugging|app faulty|app defective|app malfunctioning|app broken|app damaged|app corrupted|app infected|app virus|app malware|app spyware|app adware|app ransomware|app phishing|app scam|app fraud|app security|app privacy|app data|app information|app identity|app user|app account|app transaction|app payment|app system|app network|app server|app database|app storage|app memory|app CPU|app GPU|app battery|app power|app display|app screen|app touch|app sound|app audio|app video|app camera|app microphone|app sensor|app GPS|app location|app connectivity|app internet|app wifi|app bluetooth|app mobile data|app cellular|kuch theek nahi hai|kuch galat hai|kuch bigad gaya hai|kuch kharab ho gaya hai|kuch toot gaya hai|kuch phat gaya hai|kuch jal gaya hai|kuch ud gaya hai|kuch gayab ho gaya hai|kuch kho gaya hai|kuch mil nahi raha|kuch kaam nahi kar raha|kuch function nahi kar raha|kuch operate nahi kar raha|kuch run nahi kar raha|kuch perform nahi kar raha|kuch act nahi kar raha|kuch do nahi kar raha|kuch make nahi kar raha|kuch create nahi kar raha|kuch build nahi kar raha|kuch develop nahi kar raha|kuch design nahi kar raha|kuch plan nahi kar raha|kuch organize nahi kar raha|kuch manage nahi kar raha|kuch handle nahi kar raha|kuch take care of nahi kar raha|kuch set up nahi kar raha|kuch put in order nahi kar raha|kuch get ready nahi kar raha|kuch prepare nahi kar raha|kuch get set nahi kar raha|kuch get done nahi kar raha|kuch get complete nahi kar raha|kuch get finished nahi kar raha|kuch get wrapped up nahi kar raha|kuch get sorted nahi kar raha|kuch get arranged nahi kar raha|kuch get organized nahi kar raha|kuch get managed nahi kar raha|kuch get handled nahi kar raha|kuch get taken care of nahi kar raha|kuch set up nahi kar raha|kuch put in order nahi kar raha)$", re.IGNORECASE)
-
-# General Greeting/Chit-chat
-GENERAL_GREETING_KEYWORDS = re.compile(
-    r"^(Hi|hello|how are you|what's up|kya haal hai|hey|namaste|kaise ho|aur kya chal raha hai|good morning|good evening|good night|hola|namaskar|wassup|how's it going|what's new|kuch khaas|hi there|hey there|hello there|greetings|salutations|good day|good afternoon|good to see you|nice to see you|pleased to meet you|happy to meet you|glad to meet you|delighted to meet you|honored to meet you|privileged to meet you|fortunate to meet you|lucky to meet you|blessed to meet you|wonderful to meet you|amazing to meet you|fantastic to meet you|great to meet you|excellent to meet you|superb to meet you|awesome to meet you|incredible to meet you|unbelievable to meet you|remarkable to meet you|extraordinary to meet you|exceptional to meet you|outstanding to meet you|phenomenal to meet you|magnificent to meet you|splendid to meet you|glorious to meet you|brilliant to meet you|dazzling to meet you|radiant to meet you|shining to meet you|sparkling to meet you|glittering to meet you|shimmering to meet you|gleaming to meet you|glowing to meet you|luminous to meet you|incandescent to meet you|resplendent to meet you|effulgent to meet you|refulgent to meet you|lustrous to meet you|polished to meet you|refined to meet you|elegant to meet you|graceful to meet you|charming to meet you|delightful to meet you|pleasing to meet you|agreeable to meet you|pleasant to meet you|enjoyable to meet you|lovely to meet you|beautiful to meet you|pretty to meet you|handsome to meet you|attractive to meet you|appealing to meet you|captivating to meet you|enchanting to meet you|fascinating to meet you|mesmerizing to meet you|spellbinding to meet you|enthralling to meet you|intriguing to meet you|interesting to meet you|engaging to meet you|stimulating to meet you|thought-provoking to meet you|inspiring to meet you|motivating to meet you|encouraging to meet you|uplifting to meet you|comforting to meet you|reassuring to meet you|soothing to meet you|calming to meet you|relaxing to meet you|peaceful to meet you|tranquil to meet you|serene to meet you|blissful to meet you|joyful to meet you|cheerful to meet you|happy to meet you|merry to meet you|jolly to meet you|gleeful to meet you|ecstatic to meet you|elated to meet you|jubilant to meet you|exultant to meet you|triumphant to meet you|victorious to meet you|successful to meet you|prosperous to meet you|flourishing to meet you|thriving to meet you|blooming to meet you|blossoming to meet you|growing to meet you|developing to meet you|advancing to meet you|progressing to meet you|evolving to meet you|improving to meet you|enhancing to meet you|adding to meet you|changing to meet you|modifying to meet you|altering to meet you|revising to meet you|kaise ho|kya haal hai|how's life|how's everything|how are things|how are you doing|how are you feeling|how are you holding up|how are you getting on|how are you faring|how are you managing|how are you coping|how are you dealing|how are you handling|how are you taking it|how are you finding it|how are you liking it|how are you enjoying it|how are you experiencing it|how are you utilizing it|how are you leveraging it|how are you employing it|how are you applying it|how are you implementing it|how are you executing it|how are you operating it|how are you running it|how are you working it|how are you functioning it|how are you performing it|how are you acting it|how are you doing it|how are you making it|how are you creating it|how are you building it|how are you developing it|how are you designing it|how are you planning it|how are you organizing it|how are you managing it|how are you handling it|how are you taking care of it|how are you setting up it|how are you putting in order it|how are you getting ready it|how are you preparing it|how are you getting set it|how are you getting done it|how are you getting complete it|how are you getting finished it|how are you getting wrapped up it|how are you getting sorted it|how are you getting arranged it|how are you getting organized it|how are you getting managed it|how are you getting handled it|how are you getting taken care of it|how are you setting up it|how are you putting in order it|kya chal raha hai|kya ho raha hai|kya baat hai|anything special|anything new|anything interesting|anything exciting|anything important|anything urgent|anything relevant|anything significant|anything noteworthy|anything remarkable|anything extraordinary|anything exceptional|anything outstanding|anything phenomenal|anything magnificent|anything splendid|anything glorious|anything brilliant|anything dazzling|anything radiant|anything shining|anything sparkling|anything glittering|anything shimmering|anything gleaming|anything glowing|anything luminous|anything incandescent|anything resplendent|anything effulgent|anything refulgent|anything lustrous|anything polished|anything refined|anything elegant|anything graceful|anything charming|anything delightful|anything pleasing|anything agreeable|anything pleasant|anything enjoyable|anything lovely|anything beautiful|anything pretty|anything handsome|anything attractive|anything appealing|anything captivating|anything enchanting|anything fascinating|anything mesmerizing|anything spellbinding|anything enthralling|anything intriguing|anything interesting|anything engaging|anything stimulating|anything thought-provoking|anything inspiring|anything motivating|anything encouraging|anything uplifting|anything comforting|anything reassuring|anything soothing|anything calming|anything relaxing|anything peaceful|anything tranquil|anything serene|anything blissful|anything joyful|anything cheerful|anything happy|anything merry|anything jolly|anything gleeful|anything ecstatic|anything elated|anything jubilant|anything exultant|anything triumphant|anything victorious|anything successful|anything prosperous|anything flourishing|anything thriving|anything blooming|anything blossoming|anything growing|anything developing|anything advancing|anything progressing|anything evolving|anything improving|anything enhancing|anything adding|anything changing|anything modifying|anything altering|anything revising)$", re.IGNORECASE)
-
-# Inappropriate/Suggestive (Non-Flirty)
-INAPPROPRIATE_KEYWORDS = re.compile(
-    r"^(naughty|bad words|dirty talk|sexual|rude|offensive|vulgar|making fun|dirty joke|bad joke|adult joke|wrong message|naughtiness|being naughty|mischievous|mischief|being mischievous|roguish|being roguish|waggish|being waggish|jesting|being jesting|joking|being joking|fooling|being fooling|taunting|being taunting|ridiculing|being ridiculing|mocking|being mocking|scoffing|being scoffing|sneering|being sneering|jeering|being jeering|gibing|being gibing|bantering|being bantering|quipping|being quipping|wisecracking|being wisecracking|clowning|being clowning|fooling around|being fooling around|playing around|being playing around|messing around|being messing around|horsing around|being horsing around|larking around|being larking around|frolicking around|being frolicking around|gamboling around|being gamboling around|cavorting around|being cavorting around|romping around|being romping around|capering around|being capering around|prancing around|being prancing around|skipping around|being skipping around|dancing around|being dancing around|jumping around|being jumping around|hopping around|being hopping around|leaping around|being leaping around|bounding around|being bounding around|springing around|being springing around|bouncing around|being bouncing around|bobbing around|being bobbing around|swaying around|being swaying around|rocking around|being rocking around|wiggling around|being wiggling around|jiggling around|being jiggling around|twitching around|being twitching around|fidgeting around|being fidgeting around|squirming around|being squirming around|wriggling around|being wriggling around|twisting around|being twisting around|turning around|being turning around|spinning around|being spinning around|revolving around|being revolving around|rotating around|being rotating around|circling around|being circling around|orbiting around|being orbiting around|spiraling around|being spiraling around|winding around|being winding around|meandering around|being meandering around|rambling around|being rambling around|wandering around|being wandering around|strolling around|being strolling around|sauntering around|being sauntering around|ambling around|being ambling around|traipsing around|being traipsing around|gallivanting around|being gallivanting around|rambling around|being rambling around|wandering around|being wandering around|strolling around|being strolling around|sauntering around|being sauntering around|ambling around|being ambling around|traipsing around|being traipsing around|gallivanting around|being gallivanting around|abuses|cuss words|swear words|profanity|obscenity|vulgarity|expletives|insults|derogatory terms|offensive language|foul language|indecent language|inappropriate language|rude language|disrespectful language|impolite language|uncivil language|discourteous language|ungracious language|ill-mannered language|unrefined language|coarse language|crude language|rough language|harsh language|strong language|violent language|aggressive language|hostile language|threatening language|intimidating language|abusive language|harassing language|bullying language|demeaning language|humiliating language|degrading language|belittling language|disparaging language|contemptuous language|scornful language|disdainful language|mocking language|ridiculing language|sarcastic language|cynical language|pessimistic language|negative language|critical language|judgmental language|condemning language|denouncing language|rebuking language|reprimanding language|scolding language|chiding language|admonishing language|warning language|cautioning language|advising language|suggesting language|commending language|proposing language|offering language|presenting language|sharing language|explaining language|describing language|elaborating language|clarifying language|shedding light on language|enlightening language|making clear language|making plain language|making explicit language|making obvious language|making apparent language|making evident language|making manifest language|making known language|making public language|making available language|making accessible language|making ready language|making prepared language|making set language|making done language|making complete language|making finished language|making wrapped up language|making sorted language|making arranged language|making organized language|making managed language|making handled language|making taken care of language|making set up language|making in order language|sexual talk|suggestive talk|explicit talk|indecent talk|obscene talk|crude talk|rough talk|harsh talk|strong talk|violent talk|aggressive talk|hostile talk|threatening talk|intimidating talk|abusive talk|harassing talk|bullying talk|demeaning talk|humiliating talk|degrading talk|belittling talk|disparaging talk|contemptuous talk|scornful talk|disdainful talk|mocking talk|ridiculing talk|sarcastic talk|cynical talk|pessimistic talk|negative talk|critical talk|judgmental talk|condemning talk|denouncing talk|rebuking talk|reprimanding talk|scolding talk|chiding talk|admonishing talk|warning talk|cautioning talk|advising talk|suggesting talk|recommending talk|proposing talk|offering talk|presenting talk|sharing talk|explaining talk|describing talk|elaborating talk|clarifying talk|shedding light on talk|enlightening talk|making clear talk|making plain talk|making explicit talk|making obvious talk|making apparent talk|making evident talk|making manifest talk|making known talk|making public talk|making available talk|making accessible talk|making ready talk|making prepared talk|making set talk|making done talk|making complete talk|making finished talk|making wrapped up talk|making sorted talk|making arranged talk|making organized talk|making managed talk|making handled talk|making taken care of talk|making set up talk|making in order talk|bad|wrong|improper|incorrect|unsuitable|unacceptable|displeasing|disagreeable|unpleasant|annoying|irritating|exasperating|frustrating|disturbing|upsetting|unsettling|disquieting|troubling|worrying|alarming|shocking|appalling|horrifying|terrifying|frightening|scary|dreadful|awful|terrible|horrible|ghastly|hideous|monstrous|grotesque|repulsive|disgusting|revolting|sickening|nauseating|obnoxious|odious|hateful|contemptible|despicable|vile|wicked|evil|malicious|malevolent|sinister|ominous|threatening|dangerous|harmful|hurtful|injurious|detrimental|damaging|destructive|ruinous|devastating|calamitous|catastrophic|disastrous|tragic|unfortunate|unlucky|ill-fated|cursed|doomed|accursed|blighted|afflicted|tormented|tortured|pained|suffering|distressed|troubled|worried|anxious|uneasy|apprehensive|fearful|scared|afraid|terrified|frightened|horrified|petrified|shocked|stunned|bewildered|confused|lost|perplexed|puzzled|stumped|stuck|at a loss|in a quandary|in a dilemma|in a fix|in a pickle|in a bind|in a tight spot|in a difficult situation|in a tough spot|in a tricky situation|in a complex situation|in a complicated situation|in a convoluted situation|in a perplexing situation|in a puzzling situation|in a bewildering situation|in a confusing situation|in a difficult position|in a tough position|in a tricky position|in a complex position|in a complicated position|in a convoluted position|in a perplexing position|in a puzzling position|in a bewildering position|in a confusing position|dark joke|dank joke|incorrect message|unsuitable message|unacceptable message|displeasing message|disagreeable message|unpleasant message|annoying message|irritating message|exasperating message|frustrating message|disturbing message|upsetting message|unsettling message|disquieting message|troubling message|worrying message|alarming message|shocking message|appalling message|horrifying message|terrifying message|frightening message|scary message|dreadful message|awful message|terrible message|horrible message|ghastly message|hideous message|monstrous message|grotesque message|repulsive message|disgusting message|revolting message|sickening message|nauseating message|offensive message|obnoxious message|odious message|hateful message|contemptible message|despicable message|vile message|wicked message|evil message|malicious message|malevolent message|sinister message|ominous message|threatening message|dangerous message|harmful message|hurtful message|injurious message|detrimental message|damaging message|destructive message|ruinous message|devastating message|calamitous message|catastrophic message|disastrous message|tragic message|unfortunate message|unlucky message|ill-fated message|cursed message|doomed message|accursed message|blighted message|afflicted message|tormented message|tortured message|pained message|suffering message|distressed message|troubled message|worried message|anxious message|uneasy message|apprehensive message|fearful message|scared message|afraid message|terrified message|frightened message|horrified message|petrified message|shocked message|stunned message|bewildered message|confused message|lost message|perplexed message|puzzled message|stumped message|stuck message|at a loss message|in a quandary message|in a dilemma message|in a fix message|in a pickle message|in a bind message|in a tight spot message|in a difficult situation message|in a tough spot message|in a tricky situation message|in a complex situation message|in a complicated situation message|in a convoluted situation message|in a perplexing situation message|in a puzzling situation message|in a bewildering situation message|in a confusing situation message|in a difficult position message|in a tough position message|in a tricky position message|in a complex position message|in a complicated position message|in a convoluted position message|in a perplexing position message|in a puzzling position message|in a bewildering position message|in a confusing position)$", re.IGNORECASE)
-
-# Verification Link Inquiry
-VERIFICATION_LINK_KEYWORDS = re.compile(
-    r"^(ye link kya hai|why verification|is it safe|link pe kya karna hai|ye kaisa step hai|verification link kya hai|link ka kya kaam|safe hai kya|link kyu|ye kya verification hai|what's this link for|why do I need to verify|is it secure|what to do on the link|what is this step|link ke bare mein batao|link ka purpose|verify kyu karna hai|ye link kyu diya|link kya cheez hai|link ka matlab kya hai|link ki definition|link ki explanation|link ki jaankari|link ki information|link ke bare mein detail|link ke bare mein info|link ke bare mein explain karo|link ke bare mein samjhao|link ke bare mein jankari do|link ke bare mein bataiye|link ke bare mein bolna|link ke bare mein kuch batao|link ke bare mein sab kuch|link ke bare mein poori jaankari|link ke bare mein complete info|link ke bare mein full details|link ke bare mein brief|link ke bare mein short|link ke bare mein summary|link ke bare mein overview|link ke bare mein highlights|link ke bare mein key points|link ke bare mein main features|link ke bare mein main benefits|link ke bare mein main advantages|link ke bare mein main perks|link ke bare mein main points|link ke bare mein main things|link ke bare mein main aspects|link ke bare mein main elements|link ke bare mein main components|link ke bare mein main parts|link ke bare mein main sections|link ke bare mein main categories|link ke bare mein main types|link ke bare mein main kinds|link ke bare mein main sorts|link ke bare mein main varieties|link ke bare mein main forms|link ke bare mein main versions|link ke bare mein main editions|link ke bare mein main releases|link ke bare mein main updates|link ke bare mein main upgrades|link ke bare mein main improvements|link ke bare mein main enhancements|link ke bare mein main additions|link ke bare mein main changes|link ke bare mein main modifications|link ke bare mein main alterations|link ke bare mein main revisions|verification kyu|kyu verification|verification kyu karna hai|kyu verify karna hai|why do I need to verify|why is verification needed|why is verification required|why is verification important|why is verification necessary|why is verification essential|why is verification crucial|why is verification vital|why is verification significant|why is verification fundamental|why is verification basic|why is verification primary|why is verification main|why is verification key|why is verification core|why is verification central|why is verification principal|why is verification chief|why is verification paramount|why is verification supreme|why is verification utmost|why is verification highest|why is verification top|why is verification leading|why is verification foremost|why is verification preeminent|why is verification dominant|why is verification prevailing|why is verification prevalent|why is verification common|why is verification widespread|why is verification universal|why is verification global|why is verification international|why is verification national|why is verification regional|why is verification local|why is verification personal|why is verification individual|why is verification private|why is verification public|why is verification corporate|why is verification business|why is verification organizational|why is verification institutional|why is verification governmental|why is verification legal|why is verification regulatory|why is verification compliance|why is verification security|why is verification safety|why is verification privacy|why is verification data|why is verification information|why is verification identity|why is verification user|why is verification account|why is verification transaction|why is verification payment|why is verification fraud|why is verification spam|why is verification bot|why is verification human|why is verification real|why is verification genuine|why is verification authentic|why is verification true|why is verification valid|why is verification legitimate|why is verification proper|why is verification correct|why is verification accurate|why is verification reliable|why is verification trustworthy|why is verification dependable|why is verification credible|why is verification sound|why is verification solid|why is verification strong|why is verification robust|why is verification resilient|why is verification stable|why is verification consistent|why is verification constant|why is verification regular|why is verification continuous|why is verification ongoing|why is verification persistent|why is verification enduring|why is verification lasting|why is verification permanent|why is verification fixed|why is verification definite|why is verification certain|why is verification sure|why is verification absolute|why is verification complete|why is verification full|why is verification total|why is verification entire|why is verification whole|why is verification comprehensive|why is verification extensive|why is verification broad|why is verification wide|why is verification deep|why is verification thorough|why is verification detailed|why is verification elaborate|why is verification precise|why is verification exact|why is verification strict|why is verification rigid|why is verification firm|why is verification tight|why is verification secure|why is verification safe|why is verification protected|why is verification guarded|why is verification shielded|why is verification screened|why is verification filtered|why is verification checked|why is verification validated|why is verification confirmed|why is verification approved|why is verification authorized|why is verification permitted|why is verification allowed|why is verification granted|why is verification given|why is verification provided|why is verification offered|why is verification presented|why is verification shared|why is verification explained|why is verification described|why is verification elaborated|why is verification clarified|why is verification shed light on|why is verification enlightened|why is verification made clear|why is verification made plain|why is verification made explicit|why is verification made obvious|why is verification made apparent|why is verification made evident|why is verification made manifest|why is verification made known|why is verification made public|why is verification made available|why is verification made accessible|why is verification made ready|why is verification made prepared|why is verification made set|why is verification made done|why is verification made complete|why is verification made finished|why is verification made wrapped up|why is verification made sorted|why is verification made arranged|why is verification made organized|why is verification made managed|why is verification made handled|why is verification made taken care of|why is verification made set up|why is verification made in order|secure hai kya|is it secure|is it trustworthy|is it reliable|is it dependable|is it credible|is it sound|is it solid|is it strong|is it robust|is it resilient|is it stable|is it consistent|is it constant|is it regular|is it continuous|is it ongoing|is it persistent|is it enduring|is it lasting|is it permanent|is it fixed|is it definite|is it certain|is it sure|is it absolute|is it complete|is it full|is it total|is it entire|is it whole|is it comprehensive|is it extensive|is it broad|is it wide|is it deep|is it thorough|is it detailed|is it elaborate|is it precise|is it exact|is it strict|is it rigid|is it firm|is it tight|is it secure|is it safe|is it protected|is it guarded|is it shielded|is it screened|is it filtered|is it checked|is it validated|is it confirmed|is it approved|is it authorized|is it permitted|is it allowed|is it granted|is it given|is it provided|is it offered|is it presented|is it shared|is it explained|is it described|is it elaborated|is it clarified|is it shed light on|is it enlightened|is it made clear|is it made plain|is it made explicit|is it made obvious|is it made apparent|is it made evident|is it made manifest|is it made known|is it made public|is it made available|is it made accessible|is it made ready|is it made prepared|is it made set|is it made done|is it made complete|is it made finished|is it made wrapped up|is it made sorted|is it made arranged|is it made organized|is it made managed|is it made handled|is it made taken care of|is it made set up|is it made in order|what to do on the link|link ka use|link ka function|link ka role|link ka mahatva|link ka upyog|link ka prayog|link ka karya|link ka kaam|link ka uddeshya|link ka lakshya|link ka nishana|link ka maqsad|link ka iraada|link ka abhipray|link ka tatparya|link ka arth|link ka matlab|link ka bhav|link ka aashay|link ka sanket|link ka ishara|link ka nirdesh|link ka aadesh|link ka hukm|link ka farmaan|link ka niyam|link ka kanoon|link ka vidhan|link ka adhinium|link ka upaniyam|link ka niyamavali|link ka vidhi|link ka paddhati|link ka tareeka|link ka dhang|link ka shaili|link ka roop|link ka prakar|link ka kisam|link ka bhed|link ka varg|link ka shreni|link ka samuh|link ka dal|link ka jhund|link ka gathbandhan|link ka sangathan|link ka sanstha|link ka vibhag|link ka shakha|link ka upashakha|link ka upavibhag|link ka upashakha|link ka upavibhag)$", re.IGNORECASE)
-
-# More Payment Options (after verification)
-MORE_PAYMENT_OPTIONS_KEYWORDS = re.compile(
-    r"^(aur options hai|binance|crypto|card|net banking|wallet|other payment methods|aur payment tareeke|kisi aur se pay kar sakte hain|more options|debit card|credit card|bank transfer|paytm|google pay|phonepe|other UPI apps|digital wallet|any other way to pay|alternative payment|can I use my card|aur options|aur options hain|aur payment options|aur payment methods|aur tareeke|aur ways|aur methods|aur process|aur procedure|aur steps|aur tarike|aur prakar|aur kisam|aur bhed|aur roop|aur shaili|aur dhang|aur vidhi|aur pranaali|aur tantra|aur vyavastha|aur pranali|aur paddhati|different payment methods|any other way to pay|can I pay with something else|can I use another method|can I use a different method|can I use an alternative method|can I use other options|can I use different options|can I use more options|can I use any other option|can I use any different option|can I use any alternative option|can I use any other method|can I use any different method|can I use any alternative method|can I use any other way|can I use any different way|can I use any alternative way|cards|bank card|ATM card|Rupay card|Visa card|Mastercard|Amex card|Discover card|Diners Club card|JCB card|UnionPay card|Maestro card|Electron card|gift card|prepaid card|virtual card|physical card|plastic card|metal card|smart card|chip card|magnetic stripe card|contactless card|NFC card|EMV card|tokenized card|encrypted card|secure card|protected card|safe card|reliable card|trusted card|verified card|authenticated card|authorized card|approved card|valid card|active card|working card|functional card|operational card|usable card|accessible card|available card|ready card|prepared card|set card|done card|complete card|finished card|wrapped up card|sorted card|arranged card|organized card|managed card|handled card|taken care of card|set up card|in order card|internet banking|online banking|wire transfer|NEFT|RTGS|IMPS|UPI transfer|bank to bank transfer|direct bank transfer|account transfer|fund transfer|money transfer|electronic transfer|digital transfer|online transfer|mobile transfer|instant transfer|quick transfer|fast transfer|secure transfer|safe transfer|reliable transfer|trusted transfer|verified transfer|authenticated transfer|authorized transfer|approved transfer|valid transfer|active transfer|working transfer|functional transfer|operational transfer|usable transfer|accessible transfer|available transfer|ready transfer|prepared transfer|set transfer|done transfer|complete transfer|finished transfer|wrapped up transfer|sorted transfer|arranged transfer|organized transfer|managed transfer|handled transfer|taken care of transfer|set up transfer|in order transfer|wallets|digital wallet|mobile wallet|e-wallet|online wallet|virtual wallet|payment wallet|Amazon Pay|Freecharge|Mobikwik|JioMoney|Airtel Money|OlaMoney|PayPal|Apple Pay|Google Wallet|Samsung Pay|Microsoft Pay|WeChat Pay|Alipay|QR wallet|UPI wallet|card wallet|bank wallet|net banking wallet|crypto wallet|Binance Pay|Coinbase Pay|Crypto.com Pay|Bybit Pay|Kraken Pay|KuCoin Pay|OKX Pay|Huobi Pay|Gate.io Pay|Bitfinex Pay|Bitstamp Pay|Bithumb Pay|Upbit Pay|Coinone Pay|Korbit Pay|FTX Pay|Alameda Pay|BlockFi Pay|Celsius Pay|Voyager Pay|Nexo Pay|Abra Pay|Gemini Pay|Paxos Pay|Circle Pay|Tether Pay|USDC Pay|BUSD Pay|DAI Pay|UST Pay|LUNA Pay|SOL Pay|ADA Pay|DOT Pay|AVAX Pay|SHIB Pay|DOGE Pay|XRP Pay|LTC Pay|BCH Pay|ETH Pay|BTC Pay|BNB Pay|TRX Pay|XLM Pay|EOS Pay|XMR Pay|ZEC Pay|DASH Pay|ETC Pay|VET Pay|FIL Pay|ICP Pay|LINK Pay|UNI Pay|AAVE Pay|COMP Pay|MKR Pay|SNX Pay|YFI Pay|CRV Pay|SUSHI Pay|UMA Pay|REN Pay|KNC Pay|ZRX Pay|BAT Pay|CHZ Pay|ENJ Pay|MANA Pay|SAND Pay|AXS Pay|SLP Pay|GALA Pay|ALICE Pay|TLM Pay|RACA Pay|CEEK Pay|BLOK Pay|DPET Pay|GODS Pay|IMX Pay|PYR Pay|RNDR Pay|AUDIO Pay|GRT Pay|LPT Pay|RLC Pay|OCEAN Pay|NMR Pay|CTSI Pay|BAND Pay|KAVA Pay|ZIL Pay|IOST Pay|ONT Pay|QTUM Pay|WAVES Pay|ICX Pay|RVN Pay|DGB Pay|SYS Pay|KMD Pay|ARK Pay|LSK Pay|WTC Pay|GNT Pay|REP Pay|SNT Pay|cryptocurrency|crypto payment|crypto transfer|crypto wallet|crypto exchange|Bitcoin|BTC|Ethereum|ETH|USDT|USDC|BNB|XRP|ADA|SOL|DOGE|SHIB|DOT|TRX|LTC|BCH|XLM|EOS|XMR|ZEC|DASH|ETC|VET|FIL|ICP|LINK|UNI|AAVE|COMP|MKR|SNX|YFI|CRV|SUSHI|UMA|REN|KNC|ZRX|BAT|CHZ|ENJ|MANA|SAND|AXS|SLP|GALA|ALICE|TLM|RACA|CEEK|BLOK|DPET|GODS|IMX|PYR|RNDR|AUDIO|GRT|LPT|RLC|OCEAN|NMR|CTSI|BAND|KAVA|ZIL|IOST|ONT|QTUM|WAVES|ICX|RVN|DGB|SYS|KMD|ARK|LSK|WTC|GNT|REP|SNT|Coinbase|WazirX|CoinDCX|Kraken|KuCoin|Bybit|OKX|Huobi|Gate.io|Bitfinex|Bitstamp|Bithumb|Upbit|Coinone|Korbit|FTX|Alameda|BlockFi|Celsius|Voyager|Nexo|Abra|Gemini|Paxos|Circle|Tether|USDC|BUSD|DAI|UST|LUNA|SOL|ADA|DOT|AVAX|SHIB|DOGE|XRP|LTC|BCH|ETH|BTC|BNB|TRX|XLM|EOS|XMR|ZEC|DASH|ETC|VET|FIL|ICP|LINK|UNI|AAVE|COMP|MKR|SNX|YFI|CRV|SUSHI|UMA|REN|KNC|ZRX|BAT|CHZ|ENJ|MANA|SAND|AXS|SLP|GALA|ALICE|TLM|RACA|CEEK|BLOK|DPET|GODS|IMX|PYR|RNDR|AUDIO|GRT|LPT|RLC|OCEAN|NMR|CTSI|BAND|KAVA|ZIL|IOST|ONT|QTUM|WAVES|ICX|RVN|DGB|SYS|KMD|ARK|LSK|WTC|GNT|REP|SNT)$", re.IGNORECASE)
-
-# --- Simulated Payment Data (for demonstration) ---
-# In a real application, this would come from a database or payment gateway.
-# Format: (tnx_id, amount_paid, user_id_who_paid)
-# Note: user_id_who_paid is crucial for matching the payment to the correct user.
-# For this simulation, we'll assume the TNX ID is unique enough for matching.
-DUMMY_PAYMENTS_IN_CHANNEL = [
-    {"tnx_id": "TXN1234567890", "amount": 199, "user_id": 123}, # Example: User 123 paid 199
-    {"tnx_id": "TXN9876543210", "amount": 399, "user_id": 456}, # Example: User 456 paid 399
-    {"tnx_id": "TXN5555555555", "amount": 150, "user_id": 789}, # Example: User 789 paid 150 (partial)
-    {"tnx_id": "TXN0000000000", "amount": 49, "user_id": 101}, # Example: User 101 paid 49 (partial)
-]
-
-async def check_payment_in_channel(tnx_id: str, expected_amount: int, user_id: int):
+async def update_premium_status(user_id: int, username: str, duration_days: int):
     """
-    Simulates checking for a payment in the 'payment channel'.
-    In a real bot, this would involve reading messages from a specific channel
-    or querying a payment database.
+    Updates the user's premium status in MongoDB by adding an admin-granted token
+    and updating their last_premium_check_status.
     """
-    print(f"Simulating payment check for TNX ID: {tnx_id}, Expected: {expected_amount}, User: {user_id}")
-    for payment in DUMMY_PAYMENTS_IN_CHANNEL:
-        if payment["tnx_id"].lower() == tnx_id.lower():
-            if payment["amount"] == expected_amount:
-                print(f"Payment found and amount matches for {tnx_id}")
-                return {"status": "full_payment", "paid_amount": payment["amount"]}
-            elif payment["amount"] < expected_amount:
-                print(f"Payment found but amount is less for {tnx_id}")
-                return {"status": "partial_payment", "paid_amount": payment["amount"]}
-            else:
-                # This case (overpayment) isn't explicitly handled in the prompt
-                # but could be added. For now, treat as full payment if over.
-                print(f"Payment found and amount is more than expected for {tnx_id}")
-                return {"status": "full_payment", "paid_amount": payment["amount"]}
-    print(f"No payment found for {tnx_id}")
-    return {"status": "not_found", "paid_amount": 0}
+    if not users_collection or not tokens_collection:
+        logger.error("MongoDB collections not initialized. Cannot update premium status.")
+        return False
 
+    now_utc = datetime.utcnow()
+    expires_at_utc = now_utc + timedelta(days=duration_days)
 
-# --- Message Handlers ---
+    # 1. Add/Update user document in 'users' collection
+    user_doc_update = {
+        'username': username,
+        'first_name': username, # Assuming username is first_name if no actual username
+        'last_premium_check_status': True, # Set to True as they are now premium
+        'last_updated_by_sub_bot': get_ist_now().isoformat() # Track updates from this bot
+    }
+    
+    existing_user = users_collection.find_one({'user_id': user_id})
+    if not existing_user:
+        user_doc_update['joined_date'] = now_utc
+        user_doc_update['referral_count'] = 0
+        user_doc_update['bookmarked_videos'] = []
+        user_doc_update['last_viewed_per_category'] = {}
+        user_doc_update['category_history'] = {}
 
-@app.on_message(filters.command("start"))
-async def start_command(client, message):
-    user_id = message.from_user.id
-    user_states[user_id] = {"state": STATE_AWAITING_PLAN_CHOICE, "plan": None, "expected_amount": 0}
-    await message.reply_text("Heyyy! ✨ Premium chahiye kya, cutie? 😉💖")
+    users_collection.update_one(
+        {'user_id': user_id},
+        {'$set': user_doc_update},
+        upsert=True
+    )
+    logger.info(f"User document updated/created for {user_id} in 'users' collection.")
 
-@app.on_message(filters.text & filters.private & ~filters.command("start"))
-async def handle_message(client, message):
-    user_id = message.from_user.id
-    user_text = message.text.strip()
-    current_state = user_states.get(user_id, {"state": STATE_START})["state"]
+    # 2. Add an admin-granted token to the 'tokens' collection
+    new_token = {
+        'token_id': str(uuid.uuid4()),
+        'created_at': now_utc,
+        'expires_at': expires_at_utc,
+        'is_admin_granted': True # This is the crucial flag for premium access
+    }
 
-    # --- State: START (should ideally be caught by /start, but for robustness) ---
-    if current_state == STATE_START:
-        if AFFIRMATIVE_KEYWORDS.search(user_text):
-            user_states[user_id]["state"] = STATE_AWAITING_PLAN_CHOICE
-            await message.reply_text("Aww, cool! 🥳 So, 199/- monthly ya 399/- for 3 months? Kon sa pasand aaya? 🤔💖")
-        elif PREMIUM_INFO_KEYWORDS.search(user_text):
-            await message.reply_text("Premium mein na, bohot saare exclusive perks milenge! 🤩 Jaise, early access, no ads, special content, aur bhi bohot kuch! Interested ho kya? 😉💖")
-        elif HOW_TO_SUBSCRIBE_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, awesome! 🤩 Toh, pehle batao na, 199/- monthly ya 399/- for 3 months? Kon sa chahiye? Uske baad main tumhe payment details bhejungi! 😉✨")
-        elif OFFER_KEYWORDS.search(user_text):
-            await message.reply_text("Abhi toh yahi best offers hain, cutie! 🥰 Par trust me, value for money hai! Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! 😉💖")
-        elif FREE_TRIAL_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, sorry, cutie! 🥺 Abhi koi free trial nahi hai. Par premium ke benefits itne mast hain ki tumko bilkul regret nahi hoga! 😉 Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! ✨💖")
-        elif CANCEL_REFUND_KEYWORDS.search(user_text):
-            await message.reply_text("Subscription cancel karne ke liye ya refund related queries ke liye, please hamari support team se contact karo na. Wo tumhari puri help karenge! 😊💖")
-        elif TECHNICAL_ISSUE_KEYWORDS.search(user_text):
-            await message.reply_text("Oh nooo! 😟 Kya problem ho rahi hai, cutie? Thoda aur detail mein bataoge? Main help karne ki puri koshish karungi, ya phir tumhe support team ke paas guide karungi! 🛠️💖")
-        elif INAPPROPRIATE_KEYWORDS.search(user_text):
-            await message.reply_text("Haha, lagta hai aap masti ke mood mein ho! 😉 Par main toh yahaan aapko premium ke perks batane aayi hoon, na? Toh, plan choose karoge ya kuch aur jaanna hai, sweetheart? 😉💖")
-        elif NO_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, koi baat nahi, cutie! 🥺 Jab mann kare, tab aa jaana! Main yahin milungi! 🤗💖")
-        elif GENERAL_GREETING_KEYWORDS.search(user_text):
-            await message.reply_text("Hiii there! 👋 Main theek hoon, tum kaise ho, cutie? Kuch help chahiye ya bas hi-hello? 😉💖")
-        elif GENERAL_HELP_KEYWORDS.search(user_text):
-            await message.reply_text("Heyyy, thoda aur clear karoge? 🧐 Kya jaanna chahte ho, sweetheart? Main yahi hoon help karne ke liye! 😊💖")
-        else:
-            # Default fallback for unknown input in START state
-            await message.reply_text("Heyyy! ✨ Premium chahiye kya, cutie? 😉💖")
-            user_states[user_id]["state"] = STATE_AWAITING_PLAN_CHOICE
+    tokens_collection.update_one(
+        {'user_id': user_id},
+        {'$push': {'tokens': new_token}},
+        upsert=True
+    )
+    logger.info(f"Premium token added for user {user_id} in 'tokens' collection, expires at {expires_at_utc} UTC.")
 
+    ist = pytz.timezone('Asia/Kolkata')
+    expires_at_ist = expires_at_utc.astimezone(ist)
+    
+    return expires_at_ist
 
-    # --- State: AWAITING_PLAN_CHOICE ---
-    elif current_state == STATE_AWAITING_PLAN_CHOICE:
-        if PLAN_199_KEYWORDS.search(user_text):
-            user_states[user_id]["plan"] = "199_monthly"
-            user_states[user_id]["expected_amount"] = PLANS["199_monthly"]
-            user_states[user_id]["state"] = STATE_AWAITING_VERIFICATION_CONFIRMATION
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("Verify Me! ✨", url=VERIFICATION_LINK)]
-                ]
-            )
-            await message.reply_text(
-                "Okay, 199/- monthly! ✅ Par wait, ek chhota sa step hai! 🤫 Pehle verify kar lo ki tum human ho, okay? Is link pe click karo: [Your Verification Link Here] ✨ Jaise hi complete hoga, main aage ki details bhejungi, promise! 😉💖",
-                reply_markup=keyboard
-            )
-        elif PLAN_399_KEYWORDS.search(user_text):
-            user_states[user_id]["plan"] = "399_3months"
-            user_states[user_id]["expected_amount"] = PLANS["399_3months"]
-            user_states[user_id]["state"] = STATE_AWAITING_VERIFICATION_CONFIRMATION
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("Verify Me! ✨", url=VERIFICATION_LINK)]
-                ]
-            )
-            await message.reply_text(
-                "Smart choice, cutie! 399/- for 3 months it is! 🥳 Ab main tumhe payment link send kar rahi hoon. Par wait, ek chhota sa step hai! 🤫 Pehle verify kar lo ki tum human ho, okay? Is link pe click karo: [Your Verification Link Here] ✨ Jaise hi complete hoga, main aage ki details bhejungi, promise! 😉💖",
-                reply_markup=keyboard
-            )
-        elif CONFUSION_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, confusion ho rahi hai? 😅 Koi nahi, sweetheart! Bas type kar do '199' monthly ke liye, ya '399' 3 months ke liye. Easy peasy! 😉💖")
-        elif PAYMENT_METHOD_INQUIRY_KEYWORDS.search(user_text):
-            await message.reply_text("Payment ke liye hum saare popular options support karte hain, jaise UPI, Net Banking, aur Cards! 💳 Don't worry, main tumhe secure payment link bhejungi jisme saare options honge! It's super easy! 😉💖")
-        elif PREMIUM_INFO_KEYWORDS.search(user_text):
-            await message.reply_text("Premium mein na, bohot saare exclusive perks milenge! 🤩 Jaise, early access, no ads, special content, aur bhi bohot kuch! Interested ho kya? 😉💖")
-        elif HOW_TO_SUBSCRIBE_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, awesome! 🤩 Toh, pehle batao na, 199/- monthly ya 399/- for 3 months? Kon sa chahiye? Uske baad main tumhe payment details bhejungi! 😉✨")
-        elif OFFER_KEYWORDS.search(user_text):
-            await message.reply_text("Abhi toh yahi best offers hain, cutie! 🥰 Par trust me, value for money hai! Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! 😉💖")
-        elif FREE_TRIAL_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, sorry, cutie! 🥺 Abhi koi free trial nahi hai. Par premium ke benefits itne mast hain ki tumko bilkul regret nahi hoga! 😉 Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! ✨💖")
-        elif CANCEL_REFUND_KEYWORDS.search(user_text):
-            await message.reply_text("Subscription cancel karne ke liye ya refund related queries ke liye, please hamari support team se contact karo na. Wo tumhari puri help karenge! 😊💖")
-        elif TECHNICAL_ISSUE_KEYWORDS.search(user_text):
-            await message.reply_text("Oh nooo! 😟 Kya problem ho rahi hai, cutie? Thoda aur detail mein bataoge? Main help karne ki puri koshish karungi, ya phir tumhe support team ke paas guide karungi! 🛠️💖")
-        elif INAPPROPRIATE_KEYWORDS.search(user_text):
-            await message.reply_text("Haha, lagta hai aap masti ke mood mein ho! 😉 Par main toh yahaan aapko premium ke perks batane aayi hoon, na? Toh, plan choose karoge ya kuch aur jaanna hai, sweetheart? 😉💖")
-        elif NO_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, koi baat nahi, cutie! 🥺 Jab mann kare, tab aa jaana! Main yahin milungi! 🤗💖")
-        elif GENERAL_GREETING_KEYWORDS.search(user_text):
-            await message.reply_text("Hiii there! 👋 Main theek hoon, tum kaise ho, cutie? Kuch help chahiye ya bas hi-hello? 😉💖")
-        elif GENERAL_HELP_KEYWORDS.search(user_text):
-            await message.reply_text("Heyyy, thoda aur clear karoge? 🧐 Kya jaanna chahte ho, sweetheart? Main yahi hoon help karne ke liye! 😊💖")
-        else:
-            await message.reply_text("Samajh nahi aaya, cutie! 😕 Please '199' monthly ke liye ya '399' 3 months ke liye type karo. 😉💖")
+# --- Telegram Bot Handlers ---
 
-    # --- State: AWAITING_VERIFICATION_CONFIRMATION ---
-    # This state is typically handled by an external system triggering a 'verification done' signal.
-    # For this simulation, we'll assume any affirmative response after sending the link means verification is done.
-    elif current_state == STATE_AWAITING_VERIFICATION_CONFIRMATION:
-        if AFFIRMATIVE_KEYWORDS.search(user_text) or "verified" in user_text.lower() or "done" in user_text.lower():
-            user_states[user_id]["state"] = STATE_AWAITING_PAYMENT_METHOD
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("QR Code 📸", callback_data="payment_qr"),
-                        InlineKeyboardButton("UPI ID 💳", callback_data="payment_upi")
-                    ]
-                ]
-            )
-            await message.reply_text("Yayyy! Verification done! 🎉 Ab batao, payment kisse karoge? QR ya UPI ID? 😉💖", reply_markup=keyboard)
-        elif VERIFICATION_LINK_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, don't worry, it's totally safe! 😊 Ye bas ek chhota sa human verification step hai, taaki hum confirm kar sakein ki tum bot nahi ho! 😉 Link pe click karke simple instructions follow karo, bas! Easy peasy! ✨💖")
-        elif NO_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, koi baat nahi, cutie! 🥺 Jab mann kare, tab aa jaana! Main yahin milungi! 🤗💖")
-            user_states[user_id]["state"] = STATE_START # Reset state if user cancels
-        else:
-            await message.reply_text("Cutie, verification complete ho gaya kya? Ya fir se link chahiye? 😉💖")
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a welcome message and offers subscription plans."""
+    user = update.effective_user
+    username = user.username if user.username else user.first_name
 
-    # --- State: AWAITING_TNX_ID ---
-    elif current_state == STATE_AWAITING_TNX_ID:
-        tnx_id = user_text.strip()
-        expected_amount = user_states[user_id].get("expected_amount")
+    welcome_message = (
+        f"Dear {username}, this is Nyraa Exclusive. Here you can buy tokens. "
+        "Please select a plan to continue."
+    )
 
-        if not tnx_id:
-            await message.reply_text("Oops! TNX ID khaali hai, cutie! 😥 Please sahi TNX ID bhejo na. 😉💖")
+    keyboard = [
+        [InlineKeyboardButton("₹69 Weekly Trial", callback_data="plan_69")],
+        [InlineKeyboardButton("₹199 Monthly", callback_data="plan_199")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(welcome_message, reply_markup=reply_markup)
+
+async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles inline button presses for plan selection and payment method selection."""
+    query = update.callback_query
+    await query.answer() # Acknowledge the callback query
+
+    user = query.from_user
+    user_id = user.id
+    username = user.username if user.username else user.first_name
+    
+    callback_data = query.data
+
+    if callback_data.startswith("plan_"):
+        try:
+            amount_str = callback_data.split("_")[1]
+            selected_amount = float(amount_str)
+        except (IndexError, ValueError):
+            logger.error(f"Invalid callback data received: {callback_data}")
+            await query.edit_message_text("An error occurred. Please try again or contact support.")
             return
 
-        payment_status = await check_payment_in_channel(tnx_id, expected_amount, user_id)
+        if selected_amount not in config.SUBSCRIPTION_PLANS:
+            await query.edit_message_text("Invalid plan selected. Please choose a valid plan.")
+            logger.warning(f"User {user_id} selected an invalid plan amount: {selected_amount}")
+            return
 
-        if payment_status["status"] == "full_payment":
-            await message.reply_text("Congratulations, cutie! 🎉 Tumhara premium access unlock ho gaya hai! Enjoy karo! 🚀💖")
-            # In a real bot, here you would grant access (e.g., add to private channel/group)
-            user_states[user_id] = {"state": STATE_START, "plan": None, "expected_amount": 0} # Reset state
-        elif payment_status["status"] == "partial_payment":
-            remaining_amount = expected_amount - payment_status["paid_amount"]
-            await message.reply_text(f"Oops! 😥 Tumhara ₹{payment_status['paid_amount']} aa gaya hai, par apne ₹{expected_amount} ka plan select kiya tha. Agar apko premium chahiye to pura pay karna hoga ya support bot se refund le lo. Baki ₹{remaining_amount} pay karke fir se TNX ID bhejo na! 😉💖")
-            # Keep user in AWAITING_TNX_ID state to allow sending remaining payment's TNX ID
-        else: # not_found
-            await message.reply_text("Invalid TNX ID, cutie! 😥 Ek bar recheck karo aur bhejo. 😉💖")
+        # Store the selected amount in user_data for later use
+        context.user_data['selected_plan_amount'] = selected_amount
+        logger.info(f"User {user_id} selected plan for amount: {selected_amount}")
 
-    # --- Fallback for unhandled states/messages ---
+        # Offer payment options
+        payment_options_keyboard = [
+            [InlineKeyboardButton("💳 UPI", callback_data=f"paymethod_{selected_amount}_upi")],
+            [InlineKeyboardButton("💰 Binance", callback_data=f"paymethod_{selected_amount}_binance")],
+            [InlineKeyboardButton("⭐ Telegram Stars", callback_data=f"paymethod_{selected_amount}_telegram_star")],
+        ]
+        reply_markup = InlineKeyboardMarkup(payment_options_keyboard)
+
+        await query.edit_message_text(
+            f"You have selected the ₹{int(selected_amount)} plan. Please choose your preferred payment method:",
+            reply_markup=reply_markup
+        )
+
+    elif callback_data.startswith("paymethod_"):
+        parts = callback_data.split("_")
+        if len(parts) < 3:
+            logger.error(f"Invalid payment method callback data: {callback_data}")
+            await query.edit_message_text("An error occurred. Please try again or contact support.")
+            return
+
+        try:
+            selected_amount = float(parts[1])
+            selected_method = parts[2]
+        except (ValueError, IndexError):
+            logger.error(f"Error parsing amount or method from callback data: {callback_data}")
+            await query.edit_message_text("An error occurred. Please try again or contact support.")
+            return
+
+        # Verify the selected amount matches the one stored earlier (optional, but good for consistency)
+        if context.user_data.get('selected_plan_amount') != selected_amount:
+            logger.warning(f"Mismatch in selected plan amount. User data: {context.user_data.get('selected_plan_amount')}, Callback: {selected_amount}")
+            await query.edit_message_text("There was a mismatch in your selected plan. Please start again with /start.")
+            return
+
+        if selected_method == "telegram_star":
+            # For Telegram Stars, we use send_invoice
+            plan_name = f"₹{int(selected_amount)} Plan"
+            plan_description = f"Subscription for {config.SUBSCRIPTION_PLANS.get(selected_amount)} days."
+            # The payload should be unique for each transaction to identify it later
+            payload = f"stars_payment_{user_id}_{int(selected_amount)}_{uuid.uuid4()}" 
+
+            # IMPORTANT: Determine the correct amount in Stars (XTR)
+            # Telegram Stars are typically 1 Star = 1 USD equivalent, but the exact conversion
+            # for your region might vary. You need to determine how many Stars correspond to your INR amount.
+            # For simplicity, we'll assume 1 INR = 1 Star for this example.
+            # In a real scenario, you'd convert INR to XTR based on current rates or fixed prices.
+            # Telegram Stars amounts are in the smallest unit (e.g., 100 for 1 Star).
+            # So, if your plan is 69 INR, and you decide 1 INR = 1 Star, then 69 Stars.
+            # If 1 Star = 80 INR, then 69/80 = 0.8625 Stars, so you'd need to adjust your pricing.
+            # For this example, let's assume 1 Star = 1 INR for simplicity in the code.
+            # So, 69 INR becomes 6900 units (69 Stars).
+            stars_amount_in_smallest_unit = int(selected_amount * 100) # Assuming 1 Star = 100 units (e.g., cents/paise equivalent)
+
+            prices = [LabeledPrice(label=plan_name, amount=stars_amount_in_smallest_unit)]
+
+            try:
+                await context.bot.send_invoice(
+                    chat_id=user_id,
+                    title=plan_name,
+                    description=plan_description,
+                    payload=payload,
+                    provider_token="", # Leave empty for Telegram Stars
+                    currency="XTR", # Telegram Stars currency
+                    prices=prices,
+                    start_parameter="stars_purchase", # Optional: for deep linking
+                )
+                await query.edit_message_text(f"Please complete your ₹{int(selected_amount)} payment using Telegram Stars via the invoice sent to you.")
+                logger.info(f"Sent Telegram Stars invoice to user {user_id} for {selected_amount} INR equivalent.")
+            except Exception as e:
+                logger.error(f"Failed to send Telegram Stars invoice to user {user_id}: {e}", exc_info=True)
+                await query.edit_message_text("❌ Failed to create Telegram Stars invoice. Please try again later or choose another payment method.")
+            return # Exit after handling Stars payment
+
+        # For UPI and Binance, continue with existing logic
+        payment_info = config.PAYMENT_DETAILS.get(selected_amount, {}).get(selected_method)
+
+        if not payment_info:
+            await query.edit_message_text(f"Payment details for {selected_method} not available for ₹{int(selected_amount)}. Please choose another method or contact support.")
+            logger.error(f"Payment details missing for amount {selected_amount} and method {selected_method}")
+            return
+
+        payment_link = payment_info.get("link")
+        qr_code_url = payment_info.get("qr_code")
+
+        payment_message = (
+            f"You have selected the ₹{int(selected_amount)} plan via {selected_method.replace('_', ' ').title()}.\n\n"
+            "Scan the QR or click the link below 👇\n\n"
+            f"🔗 {payment_link}\n\n"
+            "After you have sent the payment, send your TXN ID to confirm.\n"
+            "Example: `TXN ID 264861XXXXX`"
+        )
+
+        if qr_code_url:
+            await query.message.reply_photo(photo=qr_code_url, caption=payment_message, parse_mode="Markdown")
+        else:
+            await query.edit_message_text(payment_message, parse_mode="Markdown")
+
+
+async def handle_txn_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles messages containing 'TXN ID' to process payments.
+    Now checks against the `confirmed_upi_txns` collection and selected plan amount.
+    """
+    user = update.effective_user
+    user_id = user.id
+    username = user.username if user.username else user.first_name
+    text = update.message.text.strip()
+
+    if not text.lower().startswith("txn id"):
+        return # Not a TXN ID message, ignore
+
+    parts = text.split(" ")
+    if len(parts) < 3:
+        await update.message.reply_text(
+            "Please provide the TXN ID in the format: `TXN ID <your_transaction_id>`",
+            parse_mode="Markdown"
+        )
+        return
+
+    txn_id = parts[2].strip()
+    logger.info(f"User {user_id} ({username}) sent TXN ID: {txn_id}")
+
+    # Retrieve the selected plan amount from user_data
+    selected_plan_amount = context.user_data.get('selected_plan_amount')
+    if selected_plan_amount is None:
+        await update.message.reply_text(
+            "Please select a plan first using the /start command before sending a TXN ID."
+        )
+        return
+
+    try:
+        confirmed_payment = confirmed_txn_collection.find_one({
+            "txn_id": txn_id,
+            "timestamp": {"$gt": datetime.utcnow() - timedelta(hours=24)}, # Only consider transactions from last 24 hours
+            "status": "confirmed", # Assuming 'confirmed' status is set by the group message handler
+            "used_by_user_id": {"$exists": False} # Ensure this TXN ID hasn't been used by another user
+        })
+    except Exception as e:
+        logger.error(f"Error querying confirmed_upi_txns for TXN ID {txn_id}: {e}", exc_info=True)
+        await update.message.reply_text(
+            "❌ Payment verification system is currently experiencing issues. Please try again later or contact support."
+        )
+        return
+
+    if not confirmed_payment:
+        await update.message.reply_text(
+            "❌ Invalid TXN ID, not found in our confirmed payments, or already used. Please double-check your TXN ID and try again."
+        )
+        logger.warning(f"TXN ID {txn_id} not found in confirmed_upi_txns or already used.")
+        return
+
+    received_amount = confirmed_payment["amount"]
+
+    # --- Payment Verification Logic ---
+    if received_amount < selected_plan_amount:
+        remaining_amount = selected_plan_amount - received_amount
+        await update.message.reply_text(
+            f"You {username} have paid partially. To get full access for the ₹{int(selected_plan_amount)} plan, "
+            f"you need to pay ₹{remaining_amount:.2f} more. Please make a *new* payment for the *full* amount "
+            f"of ₹{int(selected_plan_amount)} and send the new TXN ID."
+        )
+        logger.info(f"User {user_id} paid partially. Received {received_amount}, expected {selected_plan_amount}.")
+        return
+    elif received_amount > selected_plan_amount:
+        await update.message.reply_text(
+            f"You {username} have paid more than the selected plan amount (₹{int(selected_plan_amount)}). "
+            f"Please ensure your payment matches the plan you selected. Contact support for assistance regarding the excess payment."
+        )
+        logger.warning(f"User {user_id} paid more. Received {received_amount}, expected {selected_plan_amount}.")
+        return
+    # If received_amount == selected_plan_amount, proceed with full access granting
+
+    duration_days = config.SUBSCRIPTION_PLANS.get(selected_plan_amount)
+
+    if not duration_days:
+        await update.message.reply_text(
+            "❌ An internal error occurred: Plan duration not found for the selected amount. "
+            "Please contact support if you believe this is an error."
+        )
+        logger.error(f"No duration found for selected plan amount {selected_plan_amount}.")
+        return
+
+    # --- Update MongoDB and mark transaction as used ---
+    expires_at_ist = await update_premium_status(user_id, username, duration_days)
+
+    if expires_at_ist:
+        # Mark the transaction as used in the database
+        try:
+            confirmed_txn_collection.update_one(
+                {"_id": confirmed_payment["_id"]},
+                {"$set": {"used_by_user_id": user_id, "used_at": datetime.utcnow()}}
+            )
+            logger.info(f"TXN ID {txn_id} marked as used by user {user_id}.")
+        except Exception as e:
+            logger.error(f"Error marking TXN ID {txn_id} as used: {e}", exc_info=True)
+            # Even if marking as used fails, we've already granted access, so proceed with success message
+            pass 
+
+        await update.message.reply_text(
+            f"Dear {username}, 🎉\n\n"
+            f"✅ Your payment of ₹{int(selected_plan_amount)} has been confirmed.\n"
+            f"🗓️ Premium access granted for {duration_days} days!\n"
+            f"Expires on: {expires_at_ist.strftime('%d %B %Y %H:%M %Z')}.\n\n"
+            "You can now enjoy premium content with the File-Sharing Bot!"
+        )
+        logger.info(f"Premium access granted for user {user_id} for {duration_days} days with TXN ID {txn_id}.")
+        # Clear the selected plan from user_data after successful payment
+        if 'selected_plan_amount' in context.user_data:
+            del context.user_data['selected_plan_amount']
     else:
-        if AFFIRMATIVE_KEYWORDS.search(user_text):
-            user_states[user_id]["state"] = STATE_AWAITING_PLAN_CHOICE
-            await message.reply_text("Aww, cool! 🥳 So, 199/- monthly ya 399/- for 3 months? Kon sa pasand aaya? 🤔💖")
-        elif PREMIUM_INFO_KEYWORDS.search(user_text):
-            await message.reply_text("Premium mein na, bohot saare exclusive perks milenge! 🤩 Jaise, early access, no ads, special content, aur bhi bohot kuch! Interested ho kya? 😉💖")
-        elif HOW_TO_SUBSCRIBE_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, awesome! 🤩 Toh, pehle batao na, 199/- monthly ya 399/- for 3 months? Kon sa chahiye? Uske baad main tumhe payment details bhejungi! 😉✨")
-        elif OFFER_KEYWORDS.search(user_text):
-            await message.reply_text("Abhi toh yahi best offers hain, cutie! 🥰 Par trust me, value for money hai! Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! 😉💖")
-        elif FREE_TRIAL_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, sorry, cutie! 🥺 Abhi koi free trial nahi hai. Par premium ke benefits itne mast hain ki tumko bilkul regret nahi hoga! 😉 Toh, 199/- monthly ya 399/- for 3 months? Choose kar lo na! ✨💖")
-        elif CANCEL_REFUND_KEYWORDS.search(user_text):
-            await message.reply_text("Subscription cancel karne ke liye ya refund related queries ke liye, please hamari support team se contact karo na. Wo tumhari puri help karenge! 😊💖")
-        elif TECHNICAL_ISSUE_KEYWORDS.search(user_text):
-            await message.reply_text("Oh nooo! 😟 Kya problem ho rahi hai, cutie? Thoda aur detail mein bataoge? Main help karne ki puri koshish karungi, ya phir tumhe support team ke paas guide karungi! 🛠️💖")
-        elif INAPPROPRIATE_KEYWORDS.search(user_text):
-            await message.reply_text("Haha, lagta hai aap masti ke mood mein ho! 😉 Par main toh yahaan aapko premium ke perks batane aayi hoon, na? Toh, plan choose karoge ya kuch aur jaanna hai, sweetheart? 😉💖")
-        elif NO_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, koi baat nahi, cutie! 🥺 Jab mann kare, tab aa jaana! Main yahin milungi! 🤗💖")
-            user_states[user_id] = {"state": STATE_START, "plan": None, "expected_amount": 0} # Reset state
-        elif GENERAL_GREETING_KEYWORDS.search(user_text):
-            await message.reply_text("Hiii there! 👋 Main theek hoon, tum kaise ho, cutie? Kuch help chahiye ya bas hi-hello? 😉💖")
-        elif GENERAL_HELP_KEYWORDS.search(user_text):
-            await message.reply_text("Heyyy, thoda aur clear karoge? 🧐 Kya jaanna chahte ho, sweetheart? Main yahi hoon help karne ke liye! 😊💖")
-        elif MORE_PAYMENT_OPTIONS_KEYWORDS.search(user_text):
-            await message.reply_text("Aww, filhal toh itne ही options available hain, cutie! 😅 Ek baar support bot mein poochh kar dekho na, kya pata wahaan admin aur options de de! 😉💖")
-        else:
-            await message.reply_text("Heyyy, thoda aur clear karoge? 🧐 Kya jaanna chahte ho, sweetheart? Main yahi hoon help karne ke liye! 😊💖")
+        await update.message.reply_text(
+            "An error occurred while updating your premium status. Please try again later or contact support."
+        )
+        logger.error(f"Failed to update premium status for user {user_id} with TXN ID {txn_id}.")
 
+# --- New Handler: Listen to messages in the UPI TXN Group ---
+# This handler is registered directly in main() to ensure it's part of the application.
+async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Listens for messages in the configured TXN_GROUP_ID, parses them for UPI TXN IDs and amounts,
+    and stores them in the confirmed_upi_txns collection.
+    """
+    message_text = update.message.text
+    logger.info(f"Received message in TXN group {config.TXN_GROUP_ID}: {message_text}")
 
-# --- Callback Query Handler (for inline buttons) ---
-@app.on_callback_query()
-async def handle_callback_query(client, callback_query):
-    user_id = callback_query.from_user.id
-    data = callback_query.data
-    current_state = user_states.get(user_id, {"state": STATE_START})["state"]
+    # Regex to extract TXN ID and Amount from common UPI SMS formats
+    # This regex is a starting point and might need adjustment based on your exact SMS format.
+    # It looks for patterns like "TxnId: <ID>", "Txn ID: <ID>", "UPI Ref No: <ID>"
+    # and amounts like "Rs. <AMOUNT>", "INR <AMOUNT>", "Rs<AMOUNT>"
+    txn_id_match = re.search(r'(?:TxnId|Txn ID|UPI Ref No|Ref No|UTR|Transaction ID)[:\s]*([a-zA-Z0-9]{10,20})', message_text, re.IGNORECASE)
+    amount_match = re.search(r'(?:Rs\.?|INR)\s*([\d,]+\.?\d{0,2})', message_text, re.IGNORECASE)
 
-    # Acknowledge the callback query to remove the loading state on the button
-    await callback_query.answer()
+    if txn_id_match and amount_match:
+        txn_id = txn_id_match.group(1).strip()
+        amount_str = amount_match.group(1).replace(',', '').strip()
+        try:
+            amount = float(amount_str)
+        except ValueError:
+            logger.warning(f"Could not parse amount '{amount_str}' from TXN group message: {message_text}")
+            return # Skip if amount is not a valid number
 
-    if current_state == STATE_AWAITING_PAYMENT_METHOD:
-        if data == "payment_qr":
-            user_states[user_id]["state"] = STATE_AWAITING_PAYMENT
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("Payment Done! ✅", callback_data="payment_done")]
-                ]
-            )
-            await app.send_photo(
-                chat_id=user_id,
-                photo=QR_CODE_URL,
-                caption=f"Yayy! Scan this QR code to pay ₹{user_states[user_id]['expected_amount']}/-! 🤩\n\n"
-                        "After payment is sent, tap on the 'Payment Done' button below! 😉💖",
-                reply_markup=keyboard
-            )
-        elif data == "payment_upi":
-            user_states[user_id]["state"] = STATE_AWAITING_PAYMENT
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("Payment Done! ✅", callback_data="payment_done")]
-                ]
-            )
-            await app.send_message(
-                chat_id=user_id,
-                text=f"Yayy! Pay ₹{user_states[user_id]['expected_amount']}/- to this UPI ID: `{UPI_ID}` 🤩\n\n"
-                     "After payment is sent, tap on the 'Payment Done' button below! 😉💖",
-                reply_markup=keyboard
-            )
-        else:
-            await app.send_message(user_id, "Oops! Kuch galat ho gaya. Please choose QR or UPI again. 😅💖")
-    elif current_state == STATE_AWAITING_PAYMENT:
-        if data == "payment_done":
-            user_states[user_id]["state"] = STATE_AWAITING_TNX_ID
-            await app.send_message(user_id, "Awesome! Ab apni payment ka TNX ID (Transaction ID) bhejo na, cutie! 😉💖")
-        else:
-            await app.send_message(user_id, "Oops! Kuch galat ho gaya. Please tap 'Payment Done' after paying. 😅💖")
+        logger.info(f"Parsed TXN ID: {txn_id}, Amount: {amount} from group message.")
+
+        # Check if the TXN ID already exists to prevent duplicates
+        try:
+            if confirmed_txn_collection.find_one({"txn_id": txn_id}):
+                logger.info(f"TXN ID {txn_id} already exists in confirmed_upi_txns. Skipping insertion.")
+                return
+        except Exception as e:
+            logger.error(f"Error checking for existing TXN ID {txn_id} in DB: {e}", exc_info=True)
+            # Continue trying to insert, as this might be a transient DB issue
+            pass
+
+        # Store the confirmed transaction in MongoDB
+        try:
+            confirmed_txn_collection.insert_one({
+                "txn_id": txn_id,
+                "amount": amount,
+                "timestamp": datetime.utcnow(),
+                "message_text": message_text, # Store original message for debugging
+                "status": "confirmed" # Mark as confirmed
+            })
+            logger.info(f"Stored new confirmed TXN ID: {txn_id} with amount {amount}.")
+        except Exception as e:
+            logger.error(f"Error inserting confirmed TXN ID {txn_id} into DB: {e}", exc_info=True)
     else:
-        # Handle unexpected callback queries
-        await app.send_message(user_id, "Heyyy! 🤔 Ye kya click kar diya? Chalo, /start se shuru karte hain! 😉💖")
-        user_states[user_id] = {"state": STATE_START, "plan": None, "expected_amount": 0}
+        logger.debug(f"No TXN ID or Amount found in group message: {message_text}")
+
+async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles pre-checkout queries from Telegram Stars payments."""
+    query = update.pre_checkout_query
+    user_id = query.from_user.id
+    payload = query.invoice_payload
+
+    logger.info(f"Received pre_checkout_query from {user_id} with payload: {payload}")
+
+    # You can perform final checks here before confirming the payment
+    # For example, verify the payload structure, ensure the user is still active, etc.
+    if not payload.startswith("stars_payment_"):
+        await query.answer(ok=False, error_message="Invalid payment request payload.")
+        logger.warning(f"Invalid payload in pre_checkout_query: {payload}")
+        return
+
+    # All checks passed, confirm the payment
+    await query.answer(ok=True)
+    logger.info(f"Pre-checkout query answered successfully for {user_id}.")
+
+async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles successful Telegram Stars payments."""
+    message = update.message
+    successful_payment = message.successful_payment
+    user_id = message.from_user.id
+    username = message.from_user.username if message.from_user.username else message.from_user.first_name
+    payload = successful_payment.invoice_payload
+
+    logger.info(f"Successful payment received from {user_id} for payload: {payload}")
+    logger.info(f"Payment details: Total amount: {successful_payment.total_amount}, Currency: {successful_payment.currency}")
+
+    # Parse the payload to get the original amount and user_id
+    try:
+        # Expected payload format: "stars_payment_<user_id>_<amount_in_inr>_<uuid>"
+        parts = payload.split("_")
+        if len(parts) >= 4 and parts[0] == "stars" and parts[1] == "payment":
+            original_user_id = int(parts[2])
+            paid_amount_inr = float(parts[3]) # This is the INR equivalent you expected
+        else:
+            raise ValueError("Unexpected payload format for successful payment")
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing successful payment payload '{payload}': {e}", exc_info=True)
+        await message.reply_text("❌ An error occurred while processing your payment. Please contact support.")
+        return
+
+    # Optional: Verify user_id matches and amount is as expected
+    if original_user_id != user_id:
+        logger.warning(f"Mismatch in user ID for successful Stars payment. Expected {original_user_id}, got {user_id}.")
+        # You might want to log this and potentially alert an admin.
+        await message.reply_text("There was an issue verifying your payment. Please contact support with your Telegram Stars payment details.")
+        return
+
+    # Convert the received total_amount (in Stars, smallest unit) back to your expected INR equivalent
+    # This conversion logic depends on how you defined your prices when sending the invoice.
+    # If you used `int(selected_amount * 100)` for stars_amount_in_smallest_unit, then:
+    expected_stars_amount_in_smallest_unit = int(paid_amount_inr * 100) 
+    
+    if successful_payment.total_amount < expected_stars_amount_in_smallest_unit:
+        await message.reply_text(
+            f"❌ Your Telegram Stars payment of {successful_payment.total_amount / 100:.2f} Stars was less than the required amount for the ₹{int(paid_amount_inr)} plan. Please contact support."
+        )
+        logger.warning(f"Stars payment too low. Received {successful_payment.total_amount}, expected {expected_stars_amount_in_smallest_unit}.")
+        return
+
+    duration_days = config.SUBSCRIPTION_PLANS.get(paid_amount_inr)
+    if not duration_days:
+        logger.error(f"No duration found for paid amount {paid_amount_inr} from Stars payment.")
+        await message.reply_text("❌ An internal error occurred after payment. Please contact support.")
+        return
+
+    # Update user's premium status
+    expires_at_ist = await update_premium_status(user_id, username, duration_days)
+
+    if expires_at_ist:
+        # For Stars, there's no "TXN ID" to mark as used in confirmed_upi_txns.
+        # You might want a separate collection for Stars transactions if you need to track them.
+        # For now, we just grant access.
+        
+        await message.reply_text(
+            f"Dear {username}, 🎉\n\n"
+            f"✅ Your Telegram Stars payment has been confirmed.\n"
+            f"🗓️ Premium access granted for {duration_days} days!\n"
+            f"Expires on: {expires_at_ist.strftime('%d %B %Y %H:%M %Z')}.\n\n"
+            "You can now enjoy premium content with the File-Sharing Bot!"
+        )
+        logger.info(f"Premium access granted for user {user_id} for {duration_days} days via Telegram Stars.")
+        # Clear the selected plan from user_data after successful payment
+        if 'selected_plan_amount' in context.user_data:
+            del context.user_data['selected_plan_amount']
+    else:
+        await message.reply_text(
+            "An error occurred while updating your premium status. Please try again later or contact support."
+        )
+        logger.error(f"Failed to update premium status for user {user_id} after Stars payment.")
 
 
-# --- Run the bot ---
-print("Nyraa Bot is starting...")
-app.run()
-print("Nyraa Bot has stopped.")
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send a message to the user."""
+    logger.error(f"Update {update} caused error {context.error}", exc_info=True)
+    
+    # Safely check if update.effective_message exists before trying to reply
+    if update and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "An unexpected error occurred. Please try again later."
+            )
+        except Exception as reply_e:
+            logger.error(f"Failed to send error reply to user: {reply_e}")
+    else:
+        logger.warning("Error occurred but no effective_message to reply to.")
 
+
+def main() -> None:
+    """Start the bot."""
+    if not config.BOT_TOKEN:
+        logger.critical("BOT_TOKEN environment variable not set. Exiting.")
+        return
+
+    application = Application.builder().token(config.BOT_TOKEN).build()
+
+    # Register handlers for private chat with the user
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_txn_id))
+    application.add_handler(CallbackQueryHandler(button_callback_handler)) # Handles both plan and payment method selection
+
+    # Handlers for Telegram Stars payments
+    application.add_handler(PreCheckoutQueryHandler(pre_checkout_callback))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+
+    # Register handler for messages coming from the specific TXN group
+    application.add_handler(MessageHandler(filters.Chat(config.TXN_GROUP_ID) & filters.TEXT & ~filters.COMMAND, chat_id_handler))
+
+    application.add_error_handler(error_handler)
+
+    logger.info("Bot started polling...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
+    if client:
+        client.close()
+        logger.info("MongoDB connection closed.")
