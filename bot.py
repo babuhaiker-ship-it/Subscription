@@ -35,7 +35,7 @@ mongo_client = MongoClient(config.MONGO_URI)
 db = mongo_client[config.MONGO_DB_NAME]
 tokens_collection = db['tokens']
 incoming_payments_collection = db['incoming_payments']
-users_collection = db['users'] # Added for notifying the main bot
+users_collection = db['users']
 
 # --- State Management ---
 user_state = {}
