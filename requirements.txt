@@ -1,7 +1,4 @@
 pyrogram
-python-telegram-bot
 pymongo
-aiohttp
-shortzy
-pytz
 motor
+playwright
