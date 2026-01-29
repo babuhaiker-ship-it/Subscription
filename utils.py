@@ -5,23 +5,34 @@ from pyrogram.errors import MessageIdInvalid
 
 logger = logging.getLogger(__name__)
 
-def parse_sms(text: str):
-    text = text.lower()
+class PaymentQueue:
+    def __init__(self, processor_func):
+        self.queue = asyncio.Queue()
+        self.processor_func = processor_func
+        self.is_processing = False
+        asyncio.create_task(self.worker())
 
-    # Improved regex for amount and transaction ID
-    amount_match = re.search(r'(?:rs|inr)\.?\s*([\d,]+\.?\d*)', text)
-    if not amount_match:
-        return None
-    amount = float(amount_match.group(1).replace(',', ''))
+    async def add(self, user_id, callback_query):
+        await self.queue.put((user_id, callback_query))
 
-    txn_id_match = re.search(r'(?:txn|transaction|trxn|payment)\s*(?:id|ref no|ref|id is|no):?\s*(\w+)|utr:?\s*(\d+)', text)
-    if not txn_id_match:
-        return None
-    txn_id = next((g for g in txn_id_match.groups() if g is not None), None)
+    async def worker(self):
+        while True:
+            user_id, callback_query = await self.queue.get()
+            self.is_processing = True
+            try:
+                await self.processor_func(user_id, callback_query)
+            except Exception as e:
+                logger.error(f"Error processing payment for user {user_id}: {e}")
+            finally:
+                self.is_processing = False
+                self.queue.task_done()
 
-    if amount and txn_id:
-        return {"amount": amount, "txn_id": txn_id}
-    return None
+    def get_wait_time(self):
+        # Current processing + items in queue
+        count = self.queue.qsize()
+        if self.is_processing:
+            count += 1
+        return count * 2
 
 async def send_and_schedule_deletion(app, chat_id: int, text: str, markup, delay_seconds: int):
     try:

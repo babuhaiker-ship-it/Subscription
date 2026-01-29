@@ -3,6 +3,7 @@ from pyrogram import Client
 from config import config
 from handlers.command_handler import setup_command_handlers
 from handlers.payment_handler import setup_payment_handlers
+from handlers.admin_handler import setup_admin_handlers
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -15,4 +16,5 @@ if __name__ == "__main__":
     logger.info("Starting Robust Payment Receiver Bot...")
     setup_command_handlers(app)
     setup_payment_handlers(app)
+    setup_admin_handlers(app)
     app.run()
