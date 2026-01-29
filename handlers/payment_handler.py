@@ -6,31 +6,42 @@ from utils import PaymentQueue
 import logging
 import asyncio
 import os
-from automation import generate_payment_link
+from automation import automate_payment_flow
 
 logger = logging.getLogger(__name__)
 
 payment_queue = None
 
 async def process_payment_request(user_id, client, callback_query):
-    await callback_query.message.edit_text("⏳ Wait, creating payment link... This may take a minute.")
+    chat_id = callback_query.message.chat.id
+    await callback_query.message.edit_text("⏳ Wait, initializing payment session... This may take a minute.")
 
-    # This is where the Playwright automation will be called
     try:
-        payment_link = await generate_payment_link(callback_query.message.chat.id, client)
+        status = await automate_payment_flow(chat_id, client)
 
-        if payment_link:
-            await callback_query.message.edit_text(
-                f"✅ **Payment Link Generated!**\n\n"
-                f"Please click the link below to complete your payment of **₹{config.PREMIUM_PRICE_INR}** via UPI.\n\n"
-                f"🔗 [Pay via UPI]({payment_link})\n\n"
-                f"After payment, your premium access will be activated automatically (once I add that logic!).",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("❌ Close", callback_data="cancel_payment")
-                ]])
+        if status == "SUCCESS":
+            # Grant premium access
+            await database.add_premium_access(user_id, 30) # Default 30 days
+            await client.send_message(
+                chat_id,
+                "🎉 **Payment Successful!**\n\nYour Premium Access has been activated for 30 days. Enjoy!"
             )
+            try:
+                await callback_query.message.delete()
+            except:
+                pass
+        elif status == "TIMEOUT":
+            await client.send_message(
+                chat_id,
+                "⌛ **Payment Timed Out.**\n\nWe didn't detect your payment within 5 minutes. If you have already paid, please contact the admin."
+            )
+        elif status == "OTP_FAILED":
+            await callback_query.message.edit_text("❌ Failed to receive OTP from admin. Please try again later.")
+        elif status == "QR_NOT_FOUND":
+            await callback_query.message.edit_text("❌ Failed to generate QR code. The website might be having issues. Please try again.")
         else:
-            await callback_query.message.edit_text("❌ Failed to generate payment link. Please try again later or contact admin.")
+            await callback_query.message.edit_text("❌ An error occurred during the payment process. Please try again later.")
+
     except Exception as e:
         import traceback
         error_msg = traceback.format_exc()
@@ -39,6 +50,7 @@ async def process_payment_request(user_id, client, callback_query):
 
         # Notify admin about the error
         try:
+            error_ss = f"error_{chat_id}.png"
             await client.send_message(
                 config.ADMIN_ID,
                 f"🚨 **Automation Error!**\n\n"
@@ -46,8 +58,9 @@ async def process_payment_request(user_id, client, callback_query):
                 f"Error: `{str(e)}`"
             )
             # Optionally send the screenshot if it exists
-            if os.path.exists("error.png"):
-                await client.send_photo(config.ADMIN_ID, "error.png", caption="Error Screenshot")
+            if os.path.exists(error_ss):
+                await client.send_photo(config.ADMIN_ID, error_ss, caption="Error Screenshot")
+                os.remove(error_ss)
         except:
             pass
 

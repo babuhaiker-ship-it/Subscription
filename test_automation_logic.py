@@ -7,9 +7,9 @@ logging.basicConfig(level=logging.INFO)
 
 async def test():
     try:
-        from automation import generate_payment_link
+        from automation import automate_payment_flow
         print("Import successful")
-        # We can't really run it without DB and Client, but let's see if it fails on import or browser launch
+        # We can't really run it fully without DB and Client
     except Exception as e:
         print(f"Import failed: {e}")
         import traceback
