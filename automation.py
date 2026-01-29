@@ -42,7 +42,12 @@ async def generate_payment_link(chat_id, client):
 
     async with async_playwright() as p:
         logger.info("Launching browser...")
-        browser = await p.chromium.launch(headless=True)
+        try:
+            browser = await p.chromium.launch(headless=True)
+        except Exception as e:
+            if "playwright install" in str(e).lower():
+                raise Exception("Browsers not installed. Please run 'playwright install' on your server.")
+            raise e
 
         # Use mobile-like settings as the site seems optimized for it
         context_args = {
@@ -137,23 +142,30 @@ async def generate_payment_link(chat_id, client):
             logger.info("On checkout page. Selecting payment options...")
 
             # Try to find "Stored Payment Options" first if it needs to be expanded
-            # User said "Stored Payment Options Plural" which might mean "Stored Payment Option(s)"
-            stored_options = await page.query_selector("text=/Stored Payment Option/i")
+            # User said "Stored Payment Options Plural"
+            # We search for elements containing this text
+            stored_options = await page.query_selector("text=/Stored Payment Options/i")
+            if not stored_options:
+                stored_options = await page.query_selector("text=/Stored Payment Option/i")
+
             if stored_options:
-                logger.info("Found 'Stored Payment Options', clicking...")
+                logger.info("Found Stored Payment Options, clicking...")
                 await stored_options.click()
                 await asyncio.sleep(1)
 
             # Look for "Pay via UPI"
-            upi_option = await page.wait_for_selector("text=/Pay via UPI/i", timeout=30000)
+            # The user specifically mentioned "Stored Payment Options Plural - Pay via UPI"
+            upi_option = await page.query_selector("text=/Pay via UPI/i")
+            if not upi_option:
+                upi_option = await page.wait_for_selector("text=/UPI/i", timeout=30000)
+
             if upi_option:
-                logger.info("Found 'Pay via UPI' option, clicking...")
+                logger.info("Found UPI option, clicking...")
                 await upi_option.click()
                 await asyncio.sleep(1)
 
             # Select "pay by any upi app"
-            # Using regex for case-insensitive and flexible match
-            upi_app_option = await page.wait_for_selector("text=/pay by any upi app/i", timeout=15000)
+            upi_app_option = await page.wait_for_selector("text=/any upi app/i", timeout=15000)
             if upi_app_option:
                 logger.info("Found 'pay by any upi app', clicking...")
                 await upi_app_option.click()
