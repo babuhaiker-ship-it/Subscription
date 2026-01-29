@@ -73,7 +73,7 @@ async def generate_payment_link(chat_id, client):
                 logger.info("Entering mobile/email...")
                 await page.wait_for_selector("#mobile")
                 await page.fill("#mobile", woohoo_config["mobile"])
-                await page.click("button:has-text('LOGIN')")
+                await page.click("button:has-text('LOGIN')", force=True)
 
                 # Wait for password or OTP or next step
                 await asyncio.sleep(3)
@@ -83,7 +83,7 @@ async def generate_payment_link(chat_id, client):
                 if password_field:
                     logger.info("Entering password...")
                     await password_field.fill(woohoo_config["password"])
-                    await page.click("button:has-text('LOGIN')")
+                    await page.click("button:has-text('LOGIN')", force=True)
                     await asyncio.sleep(3)
 
                 # Check for OTP
@@ -98,7 +98,7 @@ async def generate_payment_link(chat_id, client):
                     # Find verify button
                     verify_btn = await page.query_selector("button:has-text('VERIFY'), button:has-text('SUBMIT'), button:has-text('LOGIN')")
                     if verify_btn:
-                        await verify_btn.click()
+                        await verify_btn.click(force=True)
                     await asyncio.sleep(5)
 
                 # Save session
@@ -115,11 +115,12 @@ async def generate_payment_link(chat_id, client):
 
             # Delivery Options: Send as Gift
             logger.info("Selecting 'Send as Gift'...")
-            await page.click("#GIFT")
+            # Using force=True because it might be intercepted by labels or sticky buttons
+            await page.click("#GIFT", force=True)
 
             # Delivery Mode: Both
             logger.info("Selecting 'Both' delivery mode...")
-            await page.click("#deliveryModeBoth")
+            await page.click("#deliveryModeBoth", force=True)
 
             # Gifting Details
             logger.info("Filling gifting details...")
@@ -129,11 +130,12 @@ async def generate_payment_link(chat_id, client):
             await page.fill("#message", gifting_details["message"])
 
             # Gift Now
-            await page.click("#giftNow")
+            await page.click("#giftNow", force=True)
 
             # Click PAY NOW
             logger.info("Clicking PAY NOW...")
-            await page.click("button:has-text('PAY NOW')")
+            # This is often a sticky button at the bottom, so force click might be needed
+            await page.click("button:has-text('PAY NOW')", force=True)
 
             # Wait for checkout or login redirection (sometimes it asks to login again)
             await asyncio.sleep(5)
@@ -150,7 +152,7 @@ async def generate_payment_link(chat_id, client):
 
             if stored_options:
                 logger.info("Found Stored Payment Options, clicking...")
-                await stored_options.click()
+                await stored_options.click(force=True)
                 await asyncio.sleep(1)
 
             # Look for "Pay via UPI"
@@ -161,21 +163,22 @@ async def generate_payment_link(chat_id, client):
 
             if upi_option:
                 logger.info("Found UPI option, clicking...")
-                await upi_option.click()
+                await upi_option.click(force=True)
                 await asyncio.sleep(1)
 
             # Select "pay by any upi app"
             upi_app_option = await page.wait_for_selector("text=/any upi app/i", timeout=15000)
             if upi_app_option:
                 logger.info("Found 'pay by any upi app', clicking...")
-                await upi_app_option.click()
+                await upi_app_option.click(force=True)
                 await asyncio.sleep(2)
 
             # Sometimes there is a "Pay" or "Continue" button after selecting the option
             pay_button = await page.query_selector("button:has-text('Pay Now'), button:has-text('PAY NOW'), button:has-text('Proceed to Pay'), button:has-text('PAY')")
             if pay_button:
                 logger.info("Found Pay button, clicking...")
-                await pay_button.click()
+                await pay_button.click(force=True)
+                await asyncio.sleep(5)
 
             # Wait for redirection to the payment gateway (UPI app selector/link)
             # We want to capture the final URL which is the payment link
