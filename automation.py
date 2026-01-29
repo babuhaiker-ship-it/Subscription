@@ -41,6 +41,7 @@ async def generate_payment_link(chat_id, client):
         return None
 
     async with async_playwright() as p:
+        logger.info("Launching browser...")
         browser = await p.chromium.launch(headless=True)
 
         # Use mobile-like settings as the site seems optimized for it
@@ -57,49 +58,66 @@ async def generate_payment_link(chat_id, client):
 
         try:
             # 1. Login
-            await page.goto("https://www.woohoo.in/account")
-            await asyncio.sleep(2)
+            logger.info("Navigating to Woohoo account page...")
+            await page.goto("https://www.woohoo.in/account", wait_until="networkidle")
 
-            # Check if already logged in (if we see logout or account details)
+            # Check if already logged in
             if await page.query_selector("a[href*='logout']"):
                 logger.info("Already logged in.")
             else:
+                logger.info("Entering mobile/email...")
+                await page.wait_for_selector("#mobile")
                 await page.fill("#mobile", woohoo_config["mobile"])
                 await page.click("button:has-text('LOGIN')")
-                await asyncio.sleep(2)
 
-                # Check for password or OTP
-                if await page.query_selector("input[type='password']"):
-                    await page.fill("input[type='password']", woohoo_config["password"])
+                # Wait for password or OTP or next step
+                await asyncio.sleep(3)
+
+                # Check for password
+                password_field = await page.query_selector("input[type='password']")
+                if password_field:
+                    logger.info("Entering password...")
+                    await password_field.fill(woohoo_config["password"])
                     await page.click("button:has-text('LOGIN')")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)
 
                 # Check for OTP
-                if await page.query_selector("input[placeholder*='OTP']"):
+                otp_field = await page.query_selector("input[placeholder*='OTP'], input[id*='otp'], input[name*='otp']")
+                if otp_field:
+                    logger.info("OTP required. Requesting from admin...")
                     otp = await get_otp_from_admin(chat_id, client)
                     if not otp:
+                        logger.error("No OTP received from admin.")
                         return None
-                    await page.fill("input[placeholder*='OTP']", otp)
-                    await page.click("button:has-text('VERIFY')") # Adjust selector if needed
-                    await asyncio.sleep(2)
+                    await otp_field.fill(otp)
+                    # Find verify button
+                    verify_btn = await page.query_selector("button:has-text('VERIFY'), button:has-text('SUBMIT'), button:has-text('LOGIN')")
+                    if verify_btn:
+                        await verify_btn.click()
+                    await asyncio.sleep(5)
 
                 # Save session
                 await context.storage_state(path=STORAGE_STATE)
 
             # 2. Go to Amazon Voucher page
-            await page.goto("https://www.woohoo.in/amazon-pay-digital-gift-voucher")
-            await asyncio.sleep(2)
+            logger.info("Navigating to Amazon Pay Voucher page...")
+            await page.goto("https://www.woohoo.in/amazon-pay-digital-gift-voucher", wait_until="networkidle")
 
             # Fill Denomination
+            logger.info(f"Filling denomination: {config.PREMIUM_PRICE_INR}")
+            await page.wait_for_selector("#customPriceText")
             await page.fill("#customPriceText", str(config.PREMIUM_PRICE_INR))
 
-            # Delivery Options: Send as Gift (already selected by default usually, but let's be sure)
+            # Delivery Options: Send as Gift
+            logger.info("Selecting 'Send as Gift'...")
             await page.click("#GIFT")
 
             # Delivery Mode: Both
+            logger.info("Selecting 'Both' delivery mode...")
             await page.click("#deliveryModeBoth")
 
             # Gifting Details
+            logger.info("Filling gifting details...")
             await page.fill("#name", gifting_details["name"])
             await page.fill("#email", gifting_details["email"])
             await page.fill("#receiver-mobile", gifting_details["mobile"])
@@ -109,29 +127,33 @@ async def generate_payment_link(chat_id, client):
             await page.click("#giftNow")
 
             # Click PAY NOW
+            logger.info("Clicking PAY NOW...")
             await page.click("button:has-text('PAY NOW')")
-            await asyncio.sleep(5) # Wait for checkout page to load
+
+            # Wait for checkout or login redirection (sometimes it asks to login again)
+            await asyncio.sleep(5)
 
             # 3. Checkout Page - Select Payment Options
             logger.info("On checkout page. Selecting payment options...")
 
             # Try to find "Stored Payment Options" first if it needs to be expanded
-            stored_options = await page.query_selector("text=Stored Payment Options")
+            # User said "Stored Payment Options Plural" which might mean "Stored Payment Option(s)"
+            stored_options = await page.query_selector("text=/Stored Payment Option/i")
             if stored_options:
                 logger.info("Found 'Stored Payment Options', clicking...")
                 await stored_options.click()
                 await asyncio.sleep(1)
 
             # Look for "Pay via UPI"
-            # The user said: "Stored Payment Options Plural - Pay via UPI"
-            upi_option = await page.wait_for_selector("text=Pay via UPI", timeout=30000)
+            upi_option = await page.wait_for_selector("text=/Pay via UPI/i", timeout=30000)
             if upi_option:
                 logger.info("Found 'Pay via UPI' option, clicking...")
                 await upi_option.click()
                 await asyncio.sleep(1)
 
             # Select "pay by any upi app"
-            upi_app_option = await page.wait_for_selector("text=pay by any upi app", timeout=15000)
+            # Using regex for case-insensitive and flexible match
+            upi_app_option = await page.wait_for_selector("text=/pay by any upi app/i", timeout=15000)
             if upi_app_option:
                 logger.info("Found 'pay by any upi app', clicking...")
                 await upi_app_option.click()

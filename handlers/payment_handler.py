@@ -6,6 +6,7 @@ from utils import PaymentQueue
 import logging
 import asyncio
 import os
+from automation import generate_payment_link
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,6 @@ async def process_payment_request(user_id, client, callback_query):
 
     # This is where the Playwright automation will be called
     try:
-        from automation import generate_payment_link
         payment_link = await generate_payment_link(callback_query.message.chat.id, client)
 
         if payment_link:
@@ -35,7 +35,7 @@ async def process_payment_request(user_id, client, callback_query):
         import traceback
         error_msg = traceback.format_exc()
         logger.error(f"Error in process_payment_request: {error_msg}")
-        await callback_query.message.edit_text("❌ An error occurred while generating the payment link.")
+        await callback_query.message.edit_text(f"❌ An error occurred: {str(e)}")
 
         # Notify admin about the error
         try:
