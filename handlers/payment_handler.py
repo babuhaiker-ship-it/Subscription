@@ -14,33 +14,27 @@ payment_queue = None
 
 async def process_payment_request(user_id, client, callback_query):
     chat_id = callback_query.message.chat.id
-    await callback_query.message.edit_text("⏳ Wait, initializing payment session... This may take a minute.")
+    await callback_query.message.edit_text("⏳ wait creating payment link")
 
     try:
-        status = await automate_payment_flow(chat_id, client)
+        result = await automate_payment_flow(chat_id, client)
 
-        if status == "SUCCESS":
-            # Grant premium access
-            await database.add_premium_access(user_id, 30) # Default 30 days
+        if result and ("http" in result or "upi://" in result):
             await client.send_message(
                 chat_id,
-                "🎉 **Payment Successful!**\n\nYour Premium Access has been activated for 30 days. Enjoy!"
+                f"✅ **Payment Link Generated!**\n\nClick the link below to pay **₹{config.PREMIUM_PRICE_INR}** via UPI:\n\n`{result}`\n\n"
+                f"Please complete the payment in the opened app or browser."
             )
             try:
                 await callback_query.message.delete()
             except:
                 pass
-        elif status == "TIMEOUT":
-            await client.send_message(
-                chat_id,
-                "⌛ **Payment Timed Out.**\n\nWe didn't detect your payment within 5 minutes. If you have already paid, please contact the admin."
-            )
-        elif status == "OTP_FAILED":
+        elif result == "OTP_FAILED":
             await callback_query.message.edit_text("❌ Failed to receive OTP from admin. Please try again later.")
-        elif status == "QR_NOT_FOUND":
-            await callback_query.message.edit_text("❌ Failed to generate QR code. The website might be having issues. Please try again.")
+        elif result == "CONFIG_ERROR":
+            await callback_query.message.edit_text("❌ Admin has not finished the setup yet. Please contact support.")
         else:
-            await callback_query.message.edit_text("❌ An error occurred during the payment process. Please try again later.")
+            await callback_query.message.edit_text("❌ An error occurred while creating the payment link. Please try again later.")
 
     except Exception as e:
         import traceback

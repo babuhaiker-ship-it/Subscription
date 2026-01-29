@@ -148,80 +148,63 @@ async def automate_payment_flow(chat_id, client):
             await asyncio.sleep(5)
 
             # 3. Checkout Page - Select Payment Options
-            logger.info("On checkout page. Selecting UPI...")
+            logger.info("On checkout page. Selecting UPI Payment...")
 
-            # Select UPI
-            upi_option = await page.wait_for_selector("text=/Pay via UPI/i", timeout=30000)
-            if upi_option:
-                logger.info("Found UPI option, clicking...")
-                await upi_option.click(force=True)
-                await asyncio.sleep(2)
-
-            # Select QR Code
-            logger.info("Looking for QR Code option...")
-            qr_option = await page.wait_for_selector("text=/QR Code/i", timeout=15000)
-            if qr_option:
-                logger.info("Found QR Code option, clicking...")
-                await qr_option.click(force=True)
-                await asyncio.sleep(2)
-
-            # Click final Pay button if it exists
-            pay_button = await page.query_selector("button:has-text('Pay Now'), button:has-text('PAY NOW'), button:has-text('Proceed to Pay'), button:has-text('PAY')")
-            if pay_button:
-                logger.info("Found Pay button, clicking...")
-                await pay_button.click(force=True)
-                await asyncio.sleep(5)
-
-            # Wait for QR code element to appear
-            logger.info("Waiting for QR code to appear...")
-            # Common QR selectors
-            qr_element = None
-            for selector in ["img[src*='qr']", ".qr-code", "canvas", "#qr-code", ".qrCode"]:
-                qr_element = await page.query_selector(selector)
-                if qr_element:
-                    break
-
-            if not qr_element:
-                 # Try to wait a bit more
-                 try:
-                     qr_element = await page.wait_for_selector("img[src*='qr'], .qr-code, canvas, #qr-code", timeout=30000)
-                 except:
-                     pass
-
-            if qr_element:
-                qr_path = f"qr_{chat_id}.png"
-                await qr_element.screenshot(path=qr_path)
-                logger.info(f"QR code screenshot saved: {qr_path}")
-
-                # Send QR to user via bot
-                await client.send_photo(
-                    chat_id,
-                    qr_path,
-                    caption=f"✅ **QR Code Generated!**\n\nPlease scan this QR code to pay **₹{config.PREMIUM_PRICE_INR}**.\n\n⏳ You have 5 minutes to complete the payment. The bot will automatically grant access once detected."
-                )
-                if os.path.exists(qr_path):
-                    os.remove(qr_path)
-            else:
-                logger.error("QR element not found.")
-                # We can't proceed without QR
-                return "QR_NOT_FOUND"
-
-            # 4. Wait for Redirection (Success)
-            logger.info("Waiting for payment success redirection (max 5 mins)...")
+            # Select "Stored Payment Options Plural - Pay via UPI"
+            # Using a regex to be flexible with exact text matches
+            upi_selector = "text=/Stored Payment Options Plural - Pay via UPI/i"
             try:
-                # Success usually redirects to a page with "thank you" or "success" or "confirmation"
-                await page.wait_for_function(
-                    "() => document.body.innerText.toLowerCase().includes('thank you') || "
-                    "window.location.href.toLowerCase().includes('success') || "
-                    "window.location.href.toLowerCase().includes('order-confirmation') || "
-                    "window.location.href.toLowerCase().includes('confirmation')",
-                    timeout=300000 # 5 minutes
-                )
-                logger.info("Payment success detected!")
-                return "SUCCESS"
+                logger.info(f"Waiting for selector: {upi_selector}")
+                upi_option = await page.wait_for_selector(upi_selector, timeout=30000)
+                await upi_option.click(force=True)
             except Exception as e:
-                logger.warning(f"Wait for redirect timed out or failed: {e}")
-                return "TIMEOUT"
+                logger.warning(f"Could not find 'Stored Payment Options Plural' with exact text, trying fallback: {e}")
+                # Fallback to a broader search if exact text fails
+                upi_option = await page.wait_for_selector("text=/Pay via UPI/i", timeout=15000)
+                await upi_option.click(force=True)
+
+            await asyncio.sleep(2)
+
+            # Select "pay by any upi app"
+            any_upi_selector = "text=/pay by any upi app/i"
+            logger.info(f"Waiting for selector: {any_upi_selector}")
+            any_upi_option = await page.wait_for_selector(any_upi_selector, timeout=30000)
+
+            # We expect a redirect or a link to be generated after clicking
+            logger.info("Clicking 'pay by any upi app' and capturing redirect...")
+
+            # Start waiting for a request or navigation that looks like a payment link
+            # Often it's a new page or a redirect
+            payment_link = None
+
+            try:
+                async with page.expect_navigation(timeout=60000) as navigation:
+                    await any_upi_option.click(force=True)
+                payment_link = page.url
+                logger.info(f"Captured redirect URL: {payment_link}")
+            except Exception as e:
+                logger.warning(f"Navigation expectation failed, trying current URL: {e}")
+                payment_link = page.url
+
+            if payment_link and "woohoo.in" not in payment_link:
+                return payment_link
+
+            # If still on woohoo, maybe it opened in a new tab or just updated URL
+            await asyncio.sleep(5)
+            payment_link = page.url
+
+            if payment_link and "checkout" not in payment_link and "woohoo.in" not in payment_link:
+                return payment_link
+
+            # Last ditch effort: look for any 'upi://' link on the page
+            content = await page.content()
+            if "upi://" in content:
+                import re
+                matches = re.findall(r'upi://[^\s"\'>]+', content)
+                if matches:
+                    return matches[0]
+
+            return payment_link
 
         except Exception as e:
             logger.error(f"Automation error: {e}")
