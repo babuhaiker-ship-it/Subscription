@@ -49,10 +49,10 @@ async def generate_payment_link(chat_id, client):
                 raise Exception("Browsers not installed. Please run 'playwright install' on your server.")
             raise e
 
-        # Use mobile-like settings as the site seems optimized for it
+        # Use desktop settings for browsing
         context_args = {
-            "viewport": {"width": 375, "height": 812},
-            "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/04.1"
+            "viewport": {"width": 1920, "height": 1080},
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
 
         if os.path.exists(STORAGE_STATE):
