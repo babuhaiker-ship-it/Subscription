@@ -11,17 +11,17 @@ class PaymentQueue:
         self.is_processing = False
         self._worker_task = None
 
-    async def add(self, user_id, callback_query):
+    async def add(self, user_id, client, callback_query):
         if self._worker_task is None:
             self._worker_task = asyncio.create_task(self.worker())
-        await self.queue.put((user_id, callback_query))
+        await self.queue.put((user_id, client, callback_query))
 
     async def worker(self):
         while True:
-            user_id, callback_query = await self.queue.get()
+            user_id, client, callback_query = await self.queue.get()
             self.is_processing = True
             try:
-                await self.processor_func(user_id, callback_query)
+                await self.processor_func(user_id, client, callback_query)
             except Exception as e:
                 logger.error(f"Error processing payment for user {user_id}: {e}")
             finally:

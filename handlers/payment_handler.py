@@ -11,13 +11,13 @@ logger = logging.getLogger(__name__)
 
 payment_queue = None
 
-async def process_payment_request(user_id, callback_query):
+async def process_payment_request(user_id, client, callback_query):
     await callback_query.message.edit_text("⏳ Wait, creating payment link... This may take a minute.")
 
     # This is where the Playwright automation will be called
     try:
         from automation import generate_payment_link
-        payment_link = await generate_payment_link(callback_query.message.chat.id, callback_query.client)
+        payment_link = await generate_payment_link(callback_query.message.chat.id, client)
 
         if payment_link:
             await callback_query.message.edit_text(
@@ -39,7 +39,7 @@ async def process_payment_request(user_id, callback_query):
 
         # Notify admin about the error
         try:
-            await callback_query.client.send_message(
+            await client.send_message(
                 config.ADMIN_ID,
                 f"🚨 **Automation Error!**\n\n"
                 f"User ID: `{user_id}`\n"
@@ -47,7 +47,7 @@ async def process_payment_request(user_id, callback_query):
             )
             # Optionally send the screenshot if it exists
             if os.path.exists("error.png"):
-                await callback_query.client.send_photo(config.ADMIN_ID, "error.png", caption="Error Screenshot")
+                await client.send_photo(config.ADMIN_ID, "error.png", caption="Error Screenshot")
         except:
             pass
 
@@ -63,4 +63,4 @@ def setup_payment_handlers(app):
         if wait_time > 0:
             await callback_query.answer(f"Queue is busy. Estimated wait: {wait_time} minutes.", show_alert=True)
 
-        await payment_queue.add(user_id, callback_query)
+        await payment_queue.add(user_id, client, callback_query)
