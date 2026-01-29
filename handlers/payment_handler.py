@@ -5,6 +5,7 @@ import database
 from utils import PaymentQueue
 import logging
 import asyncio
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,24 @@ async def process_payment_request(user_id, callback_query):
         else:
             await callback_query.message.edit_text("❌ Failed to generate payment link. Please try again later or contact admin.")
     except Exception as e:
-        logger.error(f"Error in process_payment_request: {e}")
+        import traceback
+        error_msg = traceback.format_exc()
+        logger.error(f"Error in process_payment_request: {error_msg}")
         await callback_query.message.edit_text("❌ An error occurred while generating the payment link.")
+
+        # Notify admin about the error
+        try:
+            await callback_query.client.send_message(
+                config.ADMIN_ID,
+                f"🚨 **Automation Error!**\n\n"
+                f"User ID: `{user_id}`\n"
+                f"Error: `{str(e)}`"
+            )
+            # Optionally send the screenshot if it exists
+            if os.path.exists("error.png"):
+                await callback_query.client.send_photo(config.ADMIN_ID, "error.png", caption="Error Screenshot")
+        except:
+            pass
 
 def setup_payment_handlers(app):
     global payment_queue

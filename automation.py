@@ -41,10 +41,14 @@ async def generate_payment_link(chat_id, client):
         return None
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True) # Set to False for debugging if needed
+        browser = await p.chromium.launch(headless=True)
 
-        # Use existing session if available
-        context_args = {}
+        # Use mobile-like settings as the site seems optimized for it
+        context_args = {
+            "viewport": {"width": 375, "height": 812},
+            "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/04.1"
+        }
+
         if os.path.exists(STORAGE_STATE):
             context_args["storage_state"] = STORAGE_STATE
 
@@ -109,23 +113,34 @@ async def generate_payment_link(chat_id, client):
             await asyncio.sleep(5) # Wait for checkout page to load
 
             # 3. Checkout Page - Select Payment Options
-            # User said: select "Stored Payment Options Plural - Pay via UPI"
-            # and then "pay by any upi app"
+            logger.info("On checkout page. Selecting payment options...")
 
-            # Wait for checkout page components
-            await page.wait_for_selector("text=Pay via UPI", timeout=30000)
+            # Try to find "Stored Payment Options" first if it needs to be expanded
+            stored_options = await page.query_selector("text=Stored Payment Options")
+            if stored_options:
+                logger.info("Found 'Stored Payment Options', clicking...")
+                await stored_options.click()
+                await asyncio.sleep(1)
 
-            # Select "Pay via UPI"
-            await page.click("text=Pay via UPI")
-            await asyncio.sleep(1)
+            # Look for "Pay via UPI"
+            # The user said: "Stored Payment Options Plural - Pay via UPI"
+            upi_option = await page.wait_for_selector("text=Pay via UPI", timeout=30000)
+            if upi_option:
+                logger.info("Found 'Pay via UPI' option, clicking...")
+                await upi_option.click()
+                await asyncio.sleep(1)
 
             # Select "pay by any upi app"
-            await page.click("text=pay by any upi app")
-            await asyncio.sleep(2)
+            upi_app_option = await page.wait_for_selector("text=pay by any upi app", timeout=15000)
+            if upi_app_option:
+                logger.info("Found 'pay by any upi app', clicking...")
+                await upi_app_option.click()
+                await asyncio.sleep(2)
 
             # Sometimes there is a "Pay" or "Continue" button after selecting the option
-            pay_button = await page.query_selector("button:has-text('Pay Now'), button:has-text('PAY NOW'), button:has-text('Proceed to Pay')")
+            pay_button = await page.query_selector("button:has-text('Pay Now'), button:has-text('PAY NOW'), button:has-text('Proceed to Pay'), button:has-text('PAY')")
             if pay_button:
+                logger.info("Found Pay button, clicking...")
                 await pay_button.click()
 
             # Wait for redirection to the payment gateway (UPI app selector/link)
