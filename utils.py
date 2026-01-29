@@ -1,4 +1,3 @@
-import re
 import asyncio
 import logging
 from pyrogram.errors import MessageIdInvalid
@@ -10,9 +9,11 @@ class PaymentQueue:
         self.queue = asyncio.Queue()
         self.processor_func = processor_func
         self.is_processing = False
-        asyncio.create_task(self.worker())
+        self._worker_task = None
 
     async def add(self, user_id, callback_query):
+        if self._worker_task is None:
+            self._worker_task = asyncio.create_task(self.worker())
         await self.queue.put((user_id, callback_query))
 
     async def worker(self):
