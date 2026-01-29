@@ -17,12 +17,13 @@ async def process_payment_request(user_id, client, callback_query):
     await callback_query.message.edit_text("⏳ wait creating payment link")
 
     try:
+        price = await database.get_price()
         result = await automate_payment_flow(chat_id, client)
 
         if result and ("http" in result or "upi://" in result):
             await client.send_message(
                 chat_id,
-                f"✅ **Payment Link Generated!**\n\nClick the link below to pay **₹{config.PREMIUM_PRICE_INR}** via UPI:\n\n`{result}`\n\n"
+                f"✅ **Payment Link Generated!**\n\nClick the link below to pay **₹{price}** via UPI:\n\n`{result}`\n\n"
                 f"Please complete the payment in the opened app or browser."
             )
             try:

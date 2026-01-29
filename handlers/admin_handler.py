@@ -16,8 +16,8 @@ def setup_admin_handlers(app: Client):
 
     @app.on_message(filters.command("setup") & filters.user(config.ADMIN_ID) & filters.private)
     async def setup_cmd(client, message):
-        await database.set_user_state(message.from_user.id, "awaiting_receiver_name")
-        await message.reply("Please send the Receiver's Name for the Gift Voucher.")
+        await database.set_user_state(message.from_user.id, "awaiting_price")
+        await message.reply("Please send the Subscription Price (in INR).")
 
     @app.on_message(filters.private & filters.user(config.ADMIN_ID) & ~filters.command(["start", "login", "setup"]))
     async def admin_conversation(client, message):
@@ -37,6 +37,15 @@ def setup_admin_handlers(app: Client):
             await database.set_woohoo_config(woohoo_config)
             await database.set_user_state(user_id, None)
             await message.reply("✅ Woohoo login credentials saved!")
+
+        elif state == "awaiting_price":
+            try:
+                price = int(message.text)
+                await database.set_price(price)
+                await database.set_user_state(user_id, "awaiting_receiver_name")
+                await message.reply(f"Price set to ₹{price}. Now please send the Receiver's Name for the Gift Voucher.")
+            except ValueError:
+                await message.reply("Invalid price. Please send a number.")
 
         elif state == "awaiting_receiver_name":
             await database.set_gifting_details({"name": message.text})

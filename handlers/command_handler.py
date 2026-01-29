@@ -9,25 +9,14 @@ def setup_command_handlers(app):
     @app.on_message(filters.command("start") & filters.private)
     async def start_cmd(client, message):
         await database.set_user_state(message.from_user.id, None)
+        price = await database.get_price()
         await message.reply(
-            "👋 **Welcome!**\n\n"
-            "This bot helps you get premium access for **@SpicyNyraa_bot**.\n\n"
-            "Click the button below to get started!",
+            f"👋 **Welcome!**\n\n"
+            f"To get premium access, you need to pay **₹{price}**.\n\n"
+            f"Click the button below to pay via UPI.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💎 Get Premium Access", callback_data="buy_premium")
+                InlineKeyboardButton("🔗 Pay via UPI", callback_data="pay_via_upi")
             ]])
-        )
-
-    @app.on_callback_query(filters.regex("buy_premium"))
-    async def buy_premium_callback(client, callback_query):
-        await callback_query.message.edit_text(
-            f"**Premium Access**\n\n"
-            f"To get premium access for **@SpicyNyraa_bot**, you need to pay **{config.PREMIUM_PRICE_INR} INR**.\n\n"
-            f"Click the button below to generate a UPI payment link.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔗 Pay via UPI", callback_data="pay_via_upi")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_payment")]
-            ])
         )
 
 

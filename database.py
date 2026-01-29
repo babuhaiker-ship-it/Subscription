@@ -33,6 +33,17 @@ async def set_gifting_details(details: dict):
         upsert=True
     )
 
+async def get_price():
+    doc = await settings_collection.find_one({'_id': 'price_config'})
+    return doc.get('price', config.PREMIUM_PRICE_INR) if doc else config.PREMIUM_PRICE_INR
+
+async def set_price(price: int):
+    await settings_collection.update_one(
+        {'_id': 'price_config'},
+        {'$set': {'price': price}},
+        upsert=True
+    )
+
 async def get_user_state(user_id: int):
     user = await users_collection.find_one({'user_id': user_id})
     return user.get('state') if user else None
@@ -43,29 +54,3 @@ async def set_user_state(user_id: int, state: str):
         {'$set': {'state': state}},
         upsert=True
     )
-
-async def add_premium_access(user_id: int, duration_days: int):
-    now = datetime.utcnow()
-    expires_at = now + timedelta(days=duration_days)
-    token = {
-        'token_id': str(uuid.uuid4()),
-        'created_at': now,
-        'expires_at': expires_at,
-        'is_admin_granted': True
-    }
-    try:
-        await tokens_collection.update_one(
-            {'user_id': user_id},
-            {'$push': {'tokens': token}},
-            upsert=True
-        )
-        await users_collection.update_one(
-            {'user_id': user_id},
-            {'$set': {'last_premium_check_status': True}},
-            upsert=True
-        )
-        logger.info(f"Premium access granted for user {user_id} for {duration_days} days.")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to grant premium access for user {user_id}: {e}")
-        return False

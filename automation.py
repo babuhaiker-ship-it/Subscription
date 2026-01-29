@@ -38,12 +38,13 @@ async def automate_payment_flow(chat_id, client):
     1. Login to Woohoo (with Admin OTP if needed)
     2. Add Amazon Voucher to cart with details
     3. Proceed to checkout
-    4. Select UPI -> QR Code
-    5. Take screenshot of QR and send to user
-    6. Wait for success redirection
+    4. Select "Stored Payment Options Plural - Pay via UPI"
+    5. Select "pay by any upi app"
+    6. Capture and return the redirect link
     """
     woohoo_config = await database.get_woohoo_config()
     gifting_details = await database.get_gifting_details()
+    price = await database.get_price()
 
     if not woohoo_config or not gifting_details:
         logger.error("Woohoo config or gifting details not found.")
@@ -118,9 +119,9 @@ async def automate_payment_flow(chat_id, client):
             await page.goto("https://www.woohoo.in/amazon-pay-digital-gift-voucher", wait_until="networkidle")
 
             # Fill Denomination
-            logger.info(f"Filling denomination: {config.PREMIUM_PRICE_INR}")
+            logger.info(f"Filling denomination: {price}")
             await page.wait_for_selector("#customPriceText")
-            await page.fill("#customPriceText", str(config.PREMIUM_PRICE_INR))
+            await page.fill("#customPriceText", str(price))
 
             # Delivery Options: Send as Gift
             logger.info("Selecting 'Send as Gift'...")
@@ -173,18 +174,34 @@ async def automate_payment_flow(chat_id, client):
             # We expect a redirect or a link to be generated after clicking
             logger.info("Clicking 'pay by any upi app' and capturing redirect...")
 
-            # Start waiting for a request or navigation that looks like a payment link
-            # Often it's a new page or a redirect
             payment_link = None
 
             try:
-                async with page.expect_navigation(timeout=60000) as navigation:
+                # Some payment gateways might open in a new tab
+                async with context.expect_page(timeout=30000) as new_page_info:
                     await any_upi_option.click(force=True)
-                payment_link = page.url
-                logger.info(f"Captured redirect URL: {payment_link}")
+
+                new_page = await new_page_info.value
+                await new_page.wait_for_load_state("networkidle")
+                payment_link = new_page.url
+                logger.info(f"Captured new page URL: {payment_link}")
+                await new_page.close()
             except Exception as e:
-                logger.warning(f"Navigation expectation failed, trying current URL: {e}")
-                payment_link = page.url
+                logger.warning(f"No new page opened, checking current page navigation: {e}")
+                try:
+                    # If no new page, maybe it's a redirect in the same page
+                    # We wait a bit to see if URL changes
+                    for _ in range(10):
+                        await asyncio.sleep(1)
+                        if "woohoo.in" not in page.url and "http" in page.url:
+                            payment_link = page.url
+                            break
+
+                    if not payment_link:
+                        payment_link = page.url
+                except Exception as ex:
+                    logger.error(f"Error checking current page URL: {ex}")
+                    payment_link = page.url
 
             if payment_link and "woohoo.in" not in payment_link:
                 return payment_link
