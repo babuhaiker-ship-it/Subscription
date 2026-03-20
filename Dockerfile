@@ -26,7 +26,7 @@ RUN apt-get update && playwright install-deps chromium && rm -rf /var/lib/apt/li
 COPY . .
 
 # Expose the port for health checks
-EXPOSE 8080
+EXPOSE 8000
 
 # Command to run the application
 CMD ["python", "bot.py"]
