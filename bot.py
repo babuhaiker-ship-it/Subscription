@@ -3,10 +3,8 @@ import asyncio
 # --- Event Loop Initialization ---
 # This MUST be at the absolute top before any Pyrogram imports to satisfy
 # its synchronous wrapper initialization on Python 3.14+.
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
 import logging
 from pyrogram import Client, idle
@@ -46,11 +44,11 @@ async def main():
     setup_command_handlers(app)
     setup_payment_handlers(app)
 
-    # Start the Pyrogram client
+    # Start the Pyrogram client first (as per Render best practices)
     await app.start()
     logger.info("Pyrogram client started.")
 
-    # Start the health check server
+    # Start the health check server after the bot is ready
     await start_health_check()
 
     # Keep the bot running
@@ -60,4 +58,9 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
