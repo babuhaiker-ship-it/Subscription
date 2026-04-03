@@ -12,6 +12,7 @@ from config import config
 from handlers.command_handler import setup_command_handlers
 from handlers.payment_handler import setup_payment_handlers
 from aiohttp import web
+from database import mongo_client
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -28,7 +29,13 @@ app = Client(
 
 # --- Health Check Server ---
 async def health_check(request):
-    return web.Response(text="Bot is running!")
+    try:
+        # Basic check to see if database is reachable
+        await mongo_client.admin.command('ping')
+        return web.json_response({"status": "ok", "bot_running": app.is_connected, "database": "connected"})
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 async def start_health_check():
     webapp = web.Application()
@@ -41,17 +48,27 @@ async def start_health_check():
 
 async def main():
     logger.info("Starting Robust Payment Receiver Bot...")
-    setup_command_handlers(app)
-    setup_payment_handlers(app)
 
-    # Start the Pyrogram client first (as per Render best practices)
+    # 1. Start the Pyrogram client (as per Render best practices)
     await app.start()
     logger.info("Pyrogram client started.")
 
-    # Start the health check server after the bot is ready
+    # 2. Check Database connection
+    try:
+        await mongo_client.admin.command('ping')
+        logger.info("Database connection established.")
+    except Exception as e:
+        logger.critical(f"Failed to connect to MongoDB: {e}")
+        # We continue anyway, the health check will reflect the failure
+
+    # 3. Setup handlers
+    setup_command_handlers(app)
+    setup_payment_handlers(app)
+
+    # 4. Start the health check server
     await start_health_check()
 
-    # Keep the bot running
+    # 5. Keep the bot running
     await idle()
 
     # Stop the client gracefully on exit
