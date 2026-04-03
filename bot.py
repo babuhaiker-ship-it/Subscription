@@ -1,5 +1,11 @@
-import logging
 import asyncio
+
+# Critical: Create and set event loop BEFORE importing Pyrogram
+# This is required for Pyrogram's synchronous wrapper initialization on some environments (e.g. Python 3.14)
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+import logging
 import os
 
 from pyrogram import Client, idle, filters
@@ -61,10 +67,6 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
-    # Create and set the event loop before anything else
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
     try:
         loop.run_until_complete(main())
     except KeyboardInterrupt:
