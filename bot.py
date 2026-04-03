@@ -2,11 +2,7 @@ import logging
 import asyncio
 import os
 
-# Set event loop for Python 3.14.3 compatibility as per memory
-# Must be done before importing pyrogram.Client
-asyncio.set_event_loop(asyncio.new_event_loop())
-
-from pyrogram import Client, idle
+from pyrogram import Client, idle, filters
 from config import config
 from handlers.command_handler import setup_command_handlers
 from handlers.payment_handler import setup_payment_handlers
@@ -40,6 +36,13 @@ async def start_web_server():
 
 async def main():
     logger.info("Starting Robust Payment Receiver Bot...")
+
+    # Global logger for all incoming messages (for debugging)
+    @app.on_message(filters.all)
+    async def log_all_messages(client, message):
+        logger.info(f"DEBUG: Received message from {message.from_user.id if message.from_user else 'Unknown'}: {message.text or message.caption or '[No text]'}")
+        message.continue_propagation()
+
     setup_command_handlers(app)
     setup_payment_handlers(app)
 
@@ -58,7 +61,13 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
+    # Create and set the event loop before anything else
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     try:
-        asyncio.run(main())
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user.")
+    finally:
+        loop.close()
