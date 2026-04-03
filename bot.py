@@ -1,17 +1,19 @@
 import asyncio
-import logging
-from pyrogram import Client
-from config import config
-from handlers.command_handler import setup_command_handlers
-from handlers.payment_handler import setup_payment_handlers
-from aiohttp import web
 
 # --- Event Loop Initialization ---
-# Required for Pyrogram on Python 3.14+ or some serverless environments
+# This MUST be at the absolute top before any Pyrogram imports to satisfy
+# its synchronous wrapper initialization on Python 3.14+.
 try:
     asyncio.get_event_loop()
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
+
+import logging
+from pyrogram import Client, idle
+from config import config
+from handlers.command_handler import setup_command_handlers
+from handlers.payment_handler import setup_payment_handlers
+from aiohttp import web
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -52,8 +54,6 @@ async def main():
     await start_health_check()
 
     # Keep the bot running
-    # We use idle() to keep the main task alive while Pyrogram handles updates
-    from pyrogram import idle
     await idle()
 
     # Stop the client gracefully on exit
