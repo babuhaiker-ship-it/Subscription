@@ -1,5 +1,5 @@
 class PaymentConfig:
-    BOT_TOKEN = '7673807124:AAETa1Bty4C4CU0De1PuP31FwMXLmgPwQLk'
+    BOT_TOKEN = '7770483831:AAE2zVM2n4B4o1FnTipudnrQeb8k2k1t_1Y'
     API_ID = 29800015
     API_HASH = 'c8f37108be31ab9ea2818bfe533fbb6f'
     MONGO_URI = 'mongodb+srv://Pyasipriya:00pEcao9sYhNC5VQ@cluster0.2dfenf7.mongodb.net/spicybot?retryWrites=true&w=majority&appName=Cluster0'
