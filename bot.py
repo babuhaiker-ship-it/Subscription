@@ -17,7 +17,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # --- Pyrogram Client ---
-app = Client("payment_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
+app = Client(
+    "payment_bot",
+    api_id=config.API_ID,
+    api_hash=config.API_HASH,
+    bot_token=config.BOT_TOKEN,
+    in_memory=True
+)
 
 async def health_check(request):
     return web.Response(text="Bot is running!")
@@ -37,12 +43,13 @@ async def main():
     setup_command_handlers(app)
     setup_payment_handlers(app)
 
+    # Start the Pyrogram client first to ensure it's up
+    await app.start()
+    me = await app.get_me()
+    logger.info(f"Bot @{me.username} is running!")
+
     # Start the web server for Render health checks
     await start_web_server()
-
-    # Start the Pyrogram client
-    await app.start()
-    logger.info("Pyrogram client started.")
 
     # Keep the bot running until interrupted
     await idle()
