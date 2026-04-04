@@ -62,8 +62,17 @@ async def start_health_server():
     print(f"Health check server running on port {PORT}")
 
 async def main():
+    if not BOT_TOKEN or not API_ID or not API_HASH:
+        print("CRITICAL: BOT_TOKEN, API_ID, or API_HASH is missing!")
+        return
+
     # Initialize settings in DB
-    await init_settings()
+    try:
+        await db.command("ping")
+        await init_settings()
+    except Exception as e:
+        print(f"CRITICAL: Failed to connect to MongoDB: {e}")
+        return
 
     # Start the bot client
     await app.start()

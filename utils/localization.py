@@ -1,7 +1,7 @@
 # Localization data for English and Hindi
 STRINGS = {
     "en": {
-        "welcome": "Welcome to **SpicyNyraa's Premium Bot**! 💎\n\nGet exclusive access to premium content, special features, and more by joining our premium plan.",
+        "welcome": f"Welcome to **{MAIN_BOT_USERNAME}'s Premium Bot**! 💎\n\nGet exclusive access to premium content, special features, and more by joining our premium plan.",
         "btn_get_premium": "💎 Get Premium Access",
         "btn_change_lang": "🌐 Change Language",
         "select_lang": "Please select your preferred language:",
@@ -10,7 +10,7 @@ STRINGS = {
         "btn_i_have_paid": "✅ I have paid",
         "ask_txn": "Please send your **Transaction ID** and **Amount** together like this:\n\n`423567890123 {price}`",
         "verifying": "⏳ Verifying your payment... please wait.",
-        "success": "🎉 **Payment Verified!**\n\nYou now have 30 days of premium access. Go to @SpicyNyraa_bot and send /start to begin!",
+        "success": f"🎉 **Payment Verified!**\n\nYou now have 30 days of premium access. Go to {MAIN_BOT_USERNAME} and send /start to begin!",
         "error_not_found": "❌ **Payment Not Found!**\n\nWe couldn't find a payment with that Transaction ID. Please make sure you entered it correctly and that you paid the exact amount.",
         "error_claimed": "❌ **Already Claimed!**\n\nThis transaction has already been used to claim premium access.",
         "error_expired": "❌ **Transaction Expired!**\n\nThis transaction is too old. Payments must be claimed within 24 hours.",
@@ -20,7 +20,7 @@ STRINGS = {
         "admin_help": "Admin Commands:\n/stats - View bot statistics\n/setprice <amount> - Update premium price\n/setupi <upi_id> - Update UPI ID\n/setqr <channel_id> <message_id> - Set QR image source",
     },
     "hi": {
-        "welcome": "**SpicyNyraa के प्रीमियम बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
+        "welcome": f"**{MAIN_BOT_USERNAME} के प्रीमियम बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
         "btn_get_premium": "💎 प्रीमियम एक्सेस प्राप्त करें",
         "btn_change_lang": "🌐 भाषा बदलें",
         "select_lang": "कृपया अपनी पसंदीदा भाषा चुनें:",
@@ -29,7 +29,7 @@ STRINGS = {
         "btn_i_have_paid": "✅ मैंने भुगतान कर दिया है",
         "ask_txn": "कृपया अपनी **लेन-देन आईडी (Transaction ID)** और **राशि (Amount)** इस तरह एक साथ भेजें:\n\n`423567890123 {price}`",
         "verifying": "⏳ आपके भुगतान की पुष्टि की जा रही है... कृपया प्रतीक्षा करें।",
-        "success": "🎉 **भुगतान सत्यापित!**\n\nअब आपके पास 30 दिनों का प्रीमियम एक्सेस है। @SpicyNyraa_bot पर जाएं और शुरू करने के लिए /start भेजें!",
+        "success": f"🎉 **भुगतान सत्यापित!**\n\nअब आपके पास 30 दिनों का प्रीमियम एक्सेस है। {MAIN_BOT_USERNAME} पर जाएं और शुरू करने के लिए /start भेजें!",
         "error_not_found": "❌ **भुगतान नहीं मिला!**\n\nहमें उस ट्रांजेक्शन आईडी के साथ कोई भुगतान नहीं मिला। कृपया सुनिश्चित करें कि आपने इसे सही ढंग से दर्ज किया है और आपने सटीक राशि का भुगतान किया है।",
         "error_claimed": "❌ **पहले ही दावा किया जा चुका है!**\n\nइस ट्रांजेक्शन का उपयोग पहले ही प्रीमियम एक्सेस के लिए किया जा चुका है।",
         "error_expired": "❌ **लेन-देन समाप्त!**\n\nयह लेन-देन बहुत पुराना है। भुगतान का दावा 24 घंटों के भीतर किया जाना चाहिए।",
