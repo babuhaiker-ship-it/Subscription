@@ -1,4 +1,12 @@
 import asyncio
+
+# For Python 3.14+, we must set an event loop before importing Pyrogram
+# to avoid RuntimeError during synchronous wrapper initialization.
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
 from pyrogram import Client, filters, idle
 from aiohttp import web
 import os
@@ -71,11 +79,5 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
-    # Ensure event loop is set for Python 3.14+ (if needed)
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
+    loop = asyncio.get_event_loop()
     loop.run_until_complete(main())

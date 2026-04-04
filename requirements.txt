@@ -3,6 +3,5 @@ motor
 aiohttp
 pytz
 shortzy
-motor
 python-dotenv
 tgcrypto

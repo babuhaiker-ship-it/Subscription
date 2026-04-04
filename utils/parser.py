@@ -11,7 +11,8 @@ from database import payments_col
 # Regular expressions for Amount
 AMOUNT_REGEX = re.compile(r"(?:INR|Rs\.?|Amount:?|₹)\s*(\d+(?:\.\d{1,2})?)", re.IGNORECASE)
 # Regular expressions for Transaction ID / UTR / Ref No
-TXN_ID_REGEX = re.compile(r"(?:Txn|Ref|UTR|Transaction ID|ID|No):?\s*([A-Za-z0-9]+)", re.IGNORECASE)
+# Reordered to match longer strings first to avoid "Txn ID" capturing "ID" as the value
+TXN_ID_REGEX = re.compile(r"(?:Transaction ID|Txn ID|Ref No|Ref|UTR|Txn|ID|No):?\s*([A-Za-z0-9]+)", re.IGNORECASE)
 
 # More comprehensive pattern for generic Indian bank SMS
 # "credited with INR 199.00. Txn ID: 423567890123"
