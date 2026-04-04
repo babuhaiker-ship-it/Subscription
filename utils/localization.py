@@ -1,3 +1,5 @@
+from config import MAIN_BOT_USERNAME
+
 # Localization data for English and Hindi
 STRINGS = {
     "en": {

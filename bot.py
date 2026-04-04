@@ -62,24 +62,30 @@ async def start_health_server():
     print(f"Health check server running on port {PORT}")
 
 async def main():
+    # Start health check server FIRST to satisfy Render's port check
+    await start_health_server()
+
     if not BOT_TOKEN or not API_ID or not API_HASH:
         print("CRITICAL: BOT_TOKEN, API_ID, or API_HASH is missing!")
         return
 
     # Initialize settings in DB
     try:
+        print("Connecting to MongoDB...")
         await db.command("ping")
         await init_settings()
+        print("MongoDB connected and settings initialized.")
     except Exception as e:
         print(f"CRITICAL: Failed to connect to MongoDB: {e}")
-        return
+        print("Please check your MONGO_URI and ensure your IP is whitelisted in Atlas.")
+        # We don't return here so the health check server keeps running
 
     # Start the bot client
-    await app.start()
-    print("Bot started!")
-
-    # Start health check server
-    await start_health_server()
+    try:
+        await app.start()
+        print("Bot started!")
+    except Exception as e:
+        print(f"CRITICAL: Failed to start Pyrogram client: {e}")
 
     # Keep the bot running
     await idle()
