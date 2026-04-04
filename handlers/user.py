@@ -15,7 +15,7 @@ async def start_handler(client, message):
     # Save user if not exists
     await users_col.update_one({"user_id": user_id}, {"$set": {"user_id": user_id}}, upsert=True)
 
-    welcome_text = get_string("welcome", lang=lang)
+    welcome_text = await get_setting(f"welcome_msg_{lang}", get_string("welcome", lang=lang))
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_get_premium", lang=lang), callback_data="get_premium")],
         [types.InlineKeyboardButton(get_string("btn_change_lang", lang=lang), callback_data="change_lang")]
@@ -39,7 +39,7 @@ async def set_lang_handler(client, callback_query):
 
     await callback_query.answer(get_string("lang_set", lang=new_lang))
     # Return to start screen
-    welcome_text = get_string("welcome", lang=new_lang)
+    welcome_text = await get_setting(f"welcome_msg_{new_lang}", get_string("welcome", lang=new_lang))
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_get_premium", lang=new_lang), callback_data="get_premium")],
         [types.InlineKeyboardButton(get_string("btn_change_lang", lang=new_lang), callback_data="change_lang")]
@@ -54,7 +54,9 @@ async def get_premium_handler(client, callback_query):
     price = await get_setting("price", 199)
     upi_id = await get_setting("upi_id", "example@upi")
 
-    pay_text = get_string("pay_instr", lang=lang, price=price, upi_id=upi_id)
+    pay_text = await get_setting(f"pay_instr_{lang}", get_string("pay_instr", lang=lang, price=price, upi_id=upi_id))
+    if "{price}" in pay_text or "{upi_id}" in pay_text:
+        pay_text = pay_text.format(price=price, upi_id=upi_id)
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_i_have_paid", lang=lang), callback_data="i_have_paid")]
     ])

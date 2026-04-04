@@ -11,6 +11,9 @@ async def admin_help_handler(client, message):
 
     lang = await get_user_lang(user_id)
     help_text = get_string("admin_help", lang=lang)
+    help_text += "\n/setwelcome <en/hi> <text> - Set welcome message"
+    help_text += "\n/setsuccess <en/hi> <text> - Set success message"
+    help_text += "\n/setinstr <en/hi> <text> - Set payment instructions"
     await message.reply_text(help_text)
 
 @Client.on_message(filters.command("stats") & filters.private)
@@ -101,3 +104,31 @@ async def addadmin_handler(client, message):
 
     await add_admin(target_id)
     await message.reply_text(f"✅ User `{target_id}` is now an admin.")
+
+@Client.on_message(filters.command(["setwelcome", "setsuccess", "setinstr"]) & filters.private)
+async def set_msg_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    cmd = message.command[0]
+    if len(message.command) < 3:
+        await message.reply_text(f"Usage: /{cmd} <en/hi> <message text>")
+        return
+
+    lang = message.command[1]
+    if lang not in ["en", "hi"]:
+        await message.reply_text("❌ Language must be 'en' or 'hi'.")
+        return
+
+    text = message.text.split(None, 2)[2]
+
+    key_map = {
+        "setwelcome": "welcome_msg",
+        "setsuccess": "success_msg",
+        "setinstr": "pay_instr"
+    }
+
+    db_key = f"{key_map[cmd]}_{lang}"
+    await set_setting(db_key, text)
+    await message.reply_text(f"✅ {cmd} for {lang} updated!")
