@@ -96,7 +96,11 @@ async def payment_submission_handler(client, message):
         )
 
         success_text = await get_setting(f"success_msg_{lang}", get_string("success", lang=lang))
-        await verifying_msg.edit_text(success_text)
+
+        # Check for success image
+        from handlers.user import send_custom_msg
+        await verifying_msg.delete()
+        await send_custom_msg(client, user_id, "success", success_text)
     else:
         # Check why it failed for better error message
         existing_payment = await payments_col.find_one({"txn_id": user_txn_id})

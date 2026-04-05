@@ -21,8 +21,14 @@ async def init_settings():
         "welcome_msg_hi": "**SpicyNyraa के प्रीमियम बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
         "success_msg_en": "🎉 **Payment Verified!**\n\nYou now have 30 days of premium access. Go to @SpicyNyraa_bot and send /start to begin!",
         "success_msg_hi": "🎉 **भुगतान सत्यापित!**\n\nअब आपके पास 30 दिनों का प्रीमियम एक्सेस है। @SpicyNyraa_bot पर जाएं और शुरू करने के लिए /start भेजें!",
-        "qr_channel_id": None, # Channel where QR images are stored
-        "qr_message_id": None # Message ID of the QR image
+        "qr_channel_id": None,
+        "qr_message_id": None,
+        "welcome_img_channel": None,
+        "welcome_img_id": None,
+        "success_img_channel": None,
+        "success_img_id": None,
+        "instr_img_channel": None,
+        "instr_img_id": None
     }
     for key, value in default_settings.items():
         await settings_col.update_one({"key": key}, {"$setOnInsert": {"value": value}}, upsert=True)

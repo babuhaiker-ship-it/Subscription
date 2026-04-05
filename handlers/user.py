@@ -7,6 +7,25 @@ async def get_user_lang(user_id):
     user = await users_col.find_one({"user_id": user_id})
     return user.get("lang", "en") if user else "en"
 
+async def send_custom_msg(client, user_id, msg_type, text, reply_markup=None):
+    img_channel = await get_setting(f"{msg_type}_img_channel")
+    img_id = await get_setting(f"{msg_type}_img_id")
+
+    if img_channel and img_id:
+        try:
+            return await client.copy_message(
+                chat_id=user_id,
+                from_chat_id=img_channel,
+                message_id=img_id,
+                caption=text,
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            print(f"Error sending image for {msg_type}: {e}")
+            return await client.send_message(user_id, text, reply_markup=reply_markup)
+    else:
+        return await client.send_message(user_id, text, reply_markup=reply_markup)
+
 @Client.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     user_id = message.from_user.id
@@ -21,7 +40,7 @@ async def start_handler(client, message):
         [types.InlineKeyboardButton(get_string("btn_change_lang", lang=lang), callback_data="change_lang")]
     ])
 
-    await message.reply_text(welcome_text, reply_markup=keyboard)
+    await send_custom_msg(client, user_id, "welcome", welcome_text, reply_markup=keyboard)
 
 @Client.on_callback_query(filters.regex("^change_lang$"))
 async def change_lang_handler(client, callback_query):
@@ -44,7 +63,10 @@ async def set_lang_handler(client, callback_query):
         [types.InlineKeyboardButton(get_string("btn_get_premium", lang=new_lang), callback_data="get_premium")],
         [types.InlineKeyboardButton(get_string("btn_change_lang", lang=new_lang), callback_data="change_lang")]
     ])
-    await callback_query.edit_message_text(welcome_text, reply_markup=keyboard)
+
+    # We delete and resend to support image update if needed
+    await callback_query.message.delete()
+    await send_custom_msg(client, callback_query.from_user.id, "welcome", welcome_text, reply_markup=keyboard)
 
 @Client.on_callback_query(filters.regex("^get_premium$"))
 async def get_premium_handler(client, callback_query):
@@ -61,37 +83,48 @@ async def get_premium_handler(client, callback_query):
         [types.InlineKeyboardButton(get_string("btn_i_have_paid", lang=lang), callback_data="i_have_paid")]
     ])
 
-    # Try to send QR image if configured
-    qr_channel_id = await get_setting("qr_channel_id")
-    qr_message_id = await get_setting("qr_message_id")
+    # Delete previous message to resend with possible image
+    await callback_query.message.delete()
 
-    sent_msg = None
-    if qr_channel_id and qr_message_id:
+    # Check for instr image or fallback to QR image
+    instr_channel = await get_setting("instr_img_channel")
+    instr_id = await get_setting("instr_img_id")
+
+    if not instr_channel:
+        instr_channel = await get_setting("qr_channel_id")
+        instr_id = await get_setting("qr_message_id")
+
+    sent_msg = await send_custom_msg(client, user_id, "instr", pay_text, reply_markup=keyboard)
+
+    # Fallback to QR code if no specific instruction image was sent
+    # Note: send_custom_msg will only return a copied message if instr_img_channel is set.
+    # We want to check if it sent a plain message (without image) and then try the QR fallback.
+    if sent_msg and not getattr(sent_msg, "photo", None) and instr_channel and instr_id:
         try:
-            # Copy QR image from the specified channel/message
+            # Delete the plain message and send the QR image instead
+            await sent_msg.delete()
             sent_msg = await client.copy_message(
                 chat_id=user_id,
-                from_chat_id=qr_channel_id,
-                message_id=qr_message_id,
+                from_chat_id=instr_channel,
+                message_id=instr_id,
                 caption=pay_text,
                 reply_markup=keyboard
             )
-            # Delete the previous message (welcome screen)
-            await callback_query.message.delete()
         except Exception as e:
-            print(f"Error copying QR code: {e}")
-            # Fallback to plain text if QR code fails
-            sent_msg = await callback_query.edit_message_text(pay_text, reply_markup=keyboard)
-    else:
-        sent_msg = await callback_query.edit_message_text(pay_text, reply_markup=keyboard)
+            print(f"Error copying instruction/QR code: {e}")
+            # If copying fails, we've already sent a plain message previously (sent_msg)
 
     # Auto-delete instruction after 10 minutes (600 seconds)
     if sent_msg:
-        await asyncio.sleep(600)
-        try:
-            await sent_msg.delete()
-        except:
-            pass
+        # Create a task so we don't block the handler thread
+        asyncio.create_task(delete_after(sent_msg, 600))
+
+async def delete_after(message, delay):
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except:
+        pass
 
 @Client.on_message(filters.command("help") & filters.private)
 async def help_handler(client, message):

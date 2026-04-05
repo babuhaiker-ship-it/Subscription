@@ -15,6 +15,7 @@ async def admin_help_handler(client, message):
     help_text += "\n/setsuccess <en/hi> <text> - Set success message"
     help_text += "\n/setinstr <en/hi> <text> - Set payment instructions"
     help_text += "\n/addadmin <user_id> - Add a new admin"
+    help_text += "\n/setimg <welcome|success|instr> <channel_id> <message_id> - Set image for a message type"
     await message.reply_text(help_text)
 
 @Client.on_message(filters.command("stats") & filters.private)
@@ -128,3 +129,27 @@ async def set_msg_handler(client, message):
     db_key = f"{key_map[cmd]}_{lang}"
     await set_setting(db_key, text)
     await message.reply_text(f"✅ {cmd} for {lang} updated!")
+
+@Client.on_message(filters.command("setimg") & filters.private)
+async def setimg_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    if len(message.command) < 4:
+        await message.reply_text("Usage: /setimg <welcome|success|instr> <channel_id> <message_id>")
+        return
+
+    msg_type = message.command[1]
+    if msg_type not in ["welcome", "success", "instr"]:
+        await message.reply_text("❌ Type must be 'welcome', 'success', or 'instr'.")
+        return
+
+    try:
+        channel_id = int(message.command[2])
+        message_id = int(message.command[3])
+        await set_setting(f"{msg_type}_img_channel", channel_id)
+        await set_setting(f"{msg_type}_img_id", message_id)
+        await message.reply_text(f"✅ {msg_type} image updated!")
+    except ValueError:
+        await message.reply_text("❌ Please enter valid numbers for channel_id and message_id.")
