@@ -13,7 +13,7 @@ import os
 import sys
 
 # Import config, db and handlers
-from config import API_ID, API_HASH, BOT_TOKEN, SMS_GROUP_ID, PORT
+from config import API_ID, API_HASH, BOT_TOKEN, SMS_GROUP_ID, PORT, MONGO_URI, DB_NAME
 from database import init_settings, db
 from utils.parser import parse_sms, store_payment
 

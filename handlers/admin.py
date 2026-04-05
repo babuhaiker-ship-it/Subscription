@@ -3,7 +3,7 @@ from database import is_admin, add_admin, get_db_stats, set_setting, get_setting
 from utils.localization import get_string
 from handlers.user import get_user_lang
 
-@Client.on_message(filters.command("admin") & filters.private)
+@Client.on_message(filters.command(["admin", "help_admin"]) & filters.private)
 async def admin_help_handler(client, message):
     user_id = message.from_user.id
     if not await is_admin(user_id):
@@ -14,6 +14,7 @@ async def admin_help_handler(client, message):
     help_text += "\n/setwelcome <en/hi> <text> - Set welcome message"
     help_text += "\n/setsuccess <en/hi> <text> - Set success message"
     help_text += "\n/setinstr <en/hi> <text> - Set payment instructions"
+    help_text += "\n/addadmin <user_id> - Add a new admin"
     await message.reply_text(help_text)
 
 @Client.on_message(filters.command("stats") & filters.private)

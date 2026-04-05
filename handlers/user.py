@@ -1,5 +1,5 @@
 from pyrogram import Client, filters, types
-from database import users_col, get_setting, set_setting, is_admin, add_admin, get_db_stats
+from database import users_col, get_setting, is_admin
 from utils.localization import get_string
 import asyncio
 
@@ -92,3 +92,20 @@ async def get_premium_handler(client, callback_query):
             await sent_msg.delete()
         except:
             pass
+
+@Client.on_message(filters.command("help") & filters.private)
+async def help_handler(client, message):
+    user_id = message.from_user.id
+    lang = await get_user_lang(user_id)
+
+    help_text = get_string("help_user", lang=lang)
+
+    if await is_admin(user_id):
+        # Admin also gets admin help
+        admin_help_text = get_string("admin_help", lang=lang)
+        admin_help_text += "\n/setwelcome <en/hi> <text> - Set welcome message"
+        admin_help_text += "\n/setsuccess <en/hi> <text> - Set success message"
+        admin_help_text += "\n/setinstr <en/hi> <text> - Set payment instructions"
+        help_text += f"\n\n--- Admin Section ---\n{admin_help_text}"
+
+    await message.reply_text(help_text)

@@ -20,6 +20,7 @@ STRINGS = {
         "error_invalid_format": "❌ **Invalid Format!**\n\nPlease send your Transaction ID and Amount together (e.g., `423567890123 {price}`).",
         "admin_stats": "📊 **Bot Statistics**\n\nTotal Users: {total_users}\nPremium Users: {premium_users}\nTotal Revenue: ₹{revenue}",
         "admin_help": "Admin Commands:\n/stats - View bot statistics\n/setprice <amount> - Update premium price\n/setupi <upi_id> - Update UPI ID\n/setqr <channel_id> <message_id> - Set QR image source",
+        "help_user": "**How to use this bot:**\n\n1. Click '💎 Get Premium Access'.\n2. Pay the required amount to the UPI ID.\n3. Send your **Transaction ID** and **Amount** like this: `423567890123 199`.\n4. Wait for verification (takes a few seconds).\n5. Enjoy premium access!",
     },
     "hi": {
         "welcome": f"**{MAIN_BOT_USERNAME} के प्रीमियम बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
@@ -39,6 +40,7 @@ STRINGS = {
         "error_invalid_format": "❌ **अवैध प्रारूप!**\n\nकृपया अपनी ट्रांजेक्शन आईडी और राशि एक साथ भेजें (जैसे, `423567890123 {price}`).",
         "admin_stats": "📊 **बॉट आँकड़े**\n\nकुल उपयोगकर्ता: {total_users}\nप्रीमियम उपयोगकर्ता: {premium_users}\nकुल राजस्व: ₹{revenue}",
         "admin_help": "एडमिन कमांड:\n/stats - बॉट आँकड़े देखें\n/setprice <राशि> - प्रीमियम मूल्य अपडेट करें\n/setupi <upi_id> - UPI ID अपडेट करें\n/setqr <channel_id> <message_id> - QR इमेज स्रोत सेट करें",
+        "help_user": "**इस बॉट का उपयोग कैसे करें:**\n\n1. '💎 प्रीमियम एक्सेस प्राप्त करें' पर क्लिक करें।\n2. UPI ID पर आवश्यक राशि का भुगतान करें।\n3. अपनी **ट्रांजेक्शन आईडी** और **राशि** इस तरह भेजें: `423567890123 199`।\n4. सत्यापन की प्रतीक्षा करें (कुछ सेकंड लगते हैं)।\n5. प्रीमियम एक्सेस का आनंद लें!",
     }
 }
 
