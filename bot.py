@@ -71,7 +71,8 @@ async def main():
 
     # Initialize settings in DB
     try:
-        print("Connecting to MongoDB...")
+        masked_uri = MONGO_URI.split("@")[-1] if MONGO_URI else "None"
+        print(f"Connecting to MongoDB: {DB_NAME} (Host: {masked_uri})")
         await db.command("ping")
         await init_settings()
         print("MongoDB connected and settings initialized.")
