@@ -1,6 +1,6 @@
 import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
-from config import MONGO_URI, DB_NAME, DEFAULT_PRICE, DEFAULT_UPI_ID, DEFAULT_QR_URL
+from config import MONGO_URI, DB_NAME, DEFAULT_PRICE, DEFAULT_UPI_ID, DEFAULT_QR_URL, OWNER_ID
 
 client = AsyncIOMotorClient(MONGO_URI)
 db = client[DB_NAME]
@@ -35,6 +35,8 @@ async def set_setting(key, value):
     await settings_col.update_one({"key": key}, {"$set": {"value": value}}, upsert=True)
 
 async def is_admin(user_id):
+    if user_id == OWNER_ID:
+        return True
     admin = await admins_col.find_one({"user_id": user_id})
     return admin is not None
 

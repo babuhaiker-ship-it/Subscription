@@ -10,6 +10,7 @@ MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME", "premium_bot")
 SMS_GROUP_ID = int(os.getenv("SMS_GROUP_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # Default Settings (can be overridden by DB)
 DEFAULT_PRICE = 199

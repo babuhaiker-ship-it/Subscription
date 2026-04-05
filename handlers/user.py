@@ -1,5 +1,5 @@
 from pyrogram import Client, filters, types
-from database import users_col, get_setting, is_admin
+from database import users_col, get_setting, is_admin, OWNER_ID
 from utils.localization import get_string
 import asyncio
 
@@ -106,6 +106,8 @@ async def help_handler(client, message):
         admin_help_text += "\n/setwelcome <en/hi> <text> - Set welcome message"
         admin_help_text += "\n/setsuccess <en/hi> <text> - Set success message"
         admin_help_text += "\n/setinstr <en/hi> <text> - Set payment instructions"
+        if user_id == OWNER_ID:
+            admin_help_text += "\n/addadmin <user_id> - Add a new admin (Owner only)"
         help_text += f"\n\n--- Admin Section ---\n{admin_help_text}"
 
     await message.reply_text(help_text)

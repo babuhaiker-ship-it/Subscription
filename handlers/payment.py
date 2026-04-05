@@ -22,7 +22,7 @@ async def i_have_paid_handler(client, callback_query):
     await callback_query.message.reply_text(ask_txn_text)
     await callback_query.answer()
 
-@Client.on_message(filters.private & ~filters.command(["start", "admin", "stats", "setprice", "setupi", "setqr"]))
+@Client.on_message(filters.private & filters.text & ~filters.command(["start", "admin", "stats", "setprice", "setupi", "setqr", "help", "help_admin", "setwelcome", "setsuccess", "setinstr", "addadmin"]))
 async def payment_submission_handler(client, message):
     user_id = message.from_user.id
     user = await users_col.find_one({"user_id": user_id})

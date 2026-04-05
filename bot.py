@@ -17,11 +17,6 @@ from config import API_ID, API_HASH, BOT_TOKEN, SMS_GROUP_ID, PORT, MONGO_URI, D
 from database import init_settings, db
 from utils.parser import parse_sms, store_payment
 
-# Import all handlers to register them
-import handlers.user
-import handlers.payment
-import handlers.admin
-
 # Create Pyrogram Client
 app = Client(
     "premium_bot",

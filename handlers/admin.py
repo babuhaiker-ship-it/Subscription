@@ -1,5 +1,5 @@
 from pyrogram import Client, filters, types
-from database import is_admin, add_admin, get_db_stats, set_setting, get_setting
+from database import is_admin, add_admin, get_db_stats, set_setting, get_setting, OWNER_ID
 from utils.localization import get_string
 from handlers.user import get_user_lang
 
@@ -84,13 +84,8 @@ async def setqr_handler(client, message):
 
 @Client.on_message(filters.command("addadmin") & filters.private)
 async def addadmin_handler(client, message):
-    # Only allow existing admins or the first user (if no admins exist)
-    # This is a bit simplified for security; usually, one super-admin is hardcoded.
-    # We'll allow the first person who calls this command to become admin if the list is empty.
-    from database import admins_col
-    admin_count = await admins_col.count_documents({})
-
-    if admin_count > 0 and not await is_admin(message.from_user.id):
+    # Only allow the owner to add new admins
+    if message.from_user.id != OWNER_ID:
         return
 
     if len(message.command) < 2:
