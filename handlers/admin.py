@@ -11,11 +11,8 @@ async def admin_help_handler(client, message):
 
     lang = await get_user_lang(user_id)
     help_text = get_string("admin_help", lang=lang)
-    help_text += "\n/setwelcome <en/hi> <text> - Set welcome message"
-    help_text += "\n/setsuccess <en/hi> <text> - Set success message"
-    help_text += "\n/setinstr <en/hi> <text> - Set payment instructions"
-    help_text += "\n/addadmin <user_id> - Add a new admin"
-    help_text += "\n/setimg <welcome|success|instr> <channel_id> <message_id> - Set image for a message type"
+    if user_id == OWNER_ID:
+        help_text += "\n/addadmin <user_id> - Add a new admin (Owner only)"
     await message.reply_text(help_text)
 
 @Client.on_message(filters.command("stats") & filters.private)
@@ -82,6 +79,24 @@ async def setqr_handler(client, message):
         await message.reply_text(f"✅ QR source updated to channel `{channel_id}` message `{message_id}`")
     except ValueError:
         await message.reply_text("❌ Please enter valid numbers for channel_id and message_id.")
+
+@Client.on_message(filters.private & filters.forwarded)
+async def get_id_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    # Extract forwarded info
+    if message.forward_from_chat:
+        chat_id = message.forward_from_chat.id
+        msg_id = message.forward_from_message_id
+        chat_name = message.forward_from_chat.title or "Channel"
+
+        text = f"📊 **Message Source Info:**\n\n"
+        text += f"📍 **{chat_name} ID:** `{chat_id}`\n"
+        text += f"🔢 **Message ID:** `{msg_id}`\n\n"
+        text += f"You can use these with `/setimg` or `/setqr` commands."
+        await message.reply_text(text)
 
 @Client.on_message(filters.command("addadmin") & filters.private)
 async def addadmin_handler(client, message):
