@@ -15,6 +15,8 @@ async def admin_help_handler(client, message):
         help_text += "\n/addadmin <user_id> - Add a new admin (Owner only)"
     help_text += "\n/setdatabase - Set image database (reply to forwarded message)"
     help_text += "\n/setupidatabase - Set payment notification group (reply to forwarded message)"
+    help_text += "\n/debug - View current bot configuration"
+    help_text += "\n/addpayment <txn_id> <amount> - Manually add a payment record"
     await message.reply_text(help_text)
 
 @Client.on_message(filters.command("stats") & filters.private)
@@ -135,11 +137,22 @@ async def setdatabase_handler(client, message):
     if not await is_admin(user_id):
         return
 
-    if not message.reply_to_message or not message.reply_to_message.forward_from_chat:
+    # Handle forward_from_chat (standard) or forward_origin (privacy enabled)
+    forwarded = message.reply_to_message
+    if not forwarded or not (forwarded.forward_from_chat or forwarded.forward_origin):
         await message.reply_text("❌ **Invalid Usage!**\n\nPlease **forward a message** from your database channel/group to this chat, then **reply** to that forwarded message with `/setdatabase`.")
         return
 
-    channel_id = message.reply_to_message.forward_from_chat.id
+    if forwarded.forward_from_chat:
+        channel_id = forwarded.forward_from_chat.id
+    else:
+        # User has hidden forward source, but for channels it's often still available in origin
+        origin = forwarded.forward_origin
+        if hasattr(origin, "chat"):
+            channel_id = origin.chat.id
+        else:
+            await message.reply_text("❌ **Privacy Error!**\n\nI couldn't detect the source channel ID. Please make sure the message is from a **Channel or Group** and that forward privacy settings allow source detection.")
+            return
 
     try:
         # Test if bot is admin in channel
@@ -173,11 +186,21 @@ async def setupidatabase_handler(client, message):
     if not await is_admin(user_id):
         return
 
-    if not message.reply_to_message or not message.reply_to_message.forward_from_chat:
+    # Handle forward_from_chat (standard) or forward_origin (privacy enabled)
+    forwarded = message.reply_to_message
+    if not forwarded or not (forwarded.forward_from_chat or forwarded.forward_origin):
         await message.reply_text("❌ **Invalid Usage!**\n\nPlease **forward a message** from your payment notification group to this chat, then **reply** to that message with `/setupidatabase`.")
         return
 
-    channel_id = message.reply_to_message.forward_from_chat.id
+    if forwarded.forward_from_chat:
+        channel_id = forwarded.forward_from_chat.id
+    else:
+        origin = forwarded.forward_origin
+        if hasattr(origin, "chat"):
+            channel_id = origin.chat.id
+        else:
+            await message.reply_text("❌ **Privacy Error!**\n\nI couldn't detect the source chat ID. Please ensure the message is from a **Group or Channel**.")
+            return
 
     try:
         chat = await client.get_chat(channel_id)
@@ -191,6 +214,50 @@ async def setupidatabase_handler(client, message):
         await message.reply_text(f"✅ **Success!**\n\nPayment notification group set to `{chat.title}` (`{channel_id}`).\n\nI will now listen for payments in this group.")
     except Exception as e:
         await message.reply_text(f"❌ Could not access group: {e}")
+
+@Client.on_message(filters.command("debug") & filters.private)
+async def debug_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    price = await get_setting("price")
+    upi = await get_setting("upi_id")
+    img_db = await get_setting("img_db_channel")
+    sms_group = await get_setting("sms_group_id")
+
+    debug_text = "🔎 **Bot Debug Info:**\n\n"
+    debug_text += f"💰 **Price:** ₹{price}\n"
+    debug_text += f"💳 **UPI:** `{upi}`\n"
+    debug_text += f"🖼 **Image DB:** `{img_db}`\n"
+    debug_text += f"📨 **SMS Group:** `{sms_group}`\n"
+    debug_text += f"👑 **Owner ID:** `{OWNER_ID}`\n"
+
+    await message.reply_text(debug_text)
+
+@Client.on_message(filters.command("addpayment") & filters.private)
+async def add_payment_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    if len(message.command) < 3:
+        await message.reply_text("Usage: `/addpayment <txn_id> <amount>`")
+        return
+
+    txn_id = message.command[1]
+    try:
+        amount = float(message.command[2])
+    except ValueError:
+        await message.reply_text("❌ Invalid amount.")
+        return
+
+    from utils.parser import store_payment
+    success, msg = await store_payment(amount, [txn_id])
+    if success:
+        await message.reply_text(f"✅ Payment record created: ₹{amount}, ID: `{txn_id}`")
+    else:
+        await message.reply_text(f"❌ Failed: {msg}")
 
 @Client.on_message(filters.private & filters.photo)
 async def admin_photo_handler(client, message):

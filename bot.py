@@ -32,16 +32,21 @@ async def sms_group_handler(client, message):
     from database import get_setting
     allowed_group = await get_setting("sms_group_id") or SMS_GROUP_ID
 
+    print(f"DEBUG: Received message in chat {message.chat.id}. Expected group: {allowed_group}")
+
     if message.chat.id != allowed_group:
         return
 
-    amount, txn_id = parse_sms(message.text)
-    if amount and txn_id:
-        success, msg = await store_payment(amount, txn_id)
+    print(f"DEBUG: Processing message: {message.text[:50]}...")
+    amount, txn_ids = parse_sms(message.text)
+    if amount and txn_ids:
+        success, msg = await store_payment(amount, txn_ids)
         if success:
-            print(f"Stored payment: ₹{amount}, Txn: {txn_id}")
+            print(f"✅ Stored payment: ₹{amount}, IDs: {txn_ids}")
         else:
-            print(f"Failed to store payment: {msg}")
+            print(f"❌ Failed to store payment: {msg}")
+    else:
+        print(f"⚠️ Could not parse message. Extracted: Amount={amount}, IDs={txn_ids}")
 
 # Health Check Server (Aiohttp)
 async def health_check(request):

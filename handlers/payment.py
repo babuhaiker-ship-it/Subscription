@@ -81,6 +81,20 @@ async def payment_submission_handler(client, message):
     claimed_payment = await payments_col.find_one_and_update(query, update)
 
     if claimed_payment:
+        # If this payment is part of a group (multiple IDs for same SMS), claim them all
+        group_id = claimed_payment.get("group_id")
+        if group_id:
+            await payments_col.update_many(
+                {"group_id": group_id, "is_claimed": False},
+                {
+                    "$set": {
+                        "is_claimed": True,
+                        "claimed_by": user_id,
+                        "claimed_at": datetime.now(pytz.utc)
+                    }
+                }
+            )
+
         # Payment found and claimed! Grant premium
         premium_expiry = datetime.now(pytz.utc) + timedelta(days=30)
 
