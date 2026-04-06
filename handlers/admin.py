@@ -13,7 +13,8 @@ async def admin_help_handler(client, message):
     help_text = get_string("admin_help", lang=lang)
     if user_id == OWNER_ID:
         help_text += "\n/addadmin <user_id> - Add a new admin (Owner only)"
-    help_text += "\n/setdatabase <channel_id> - Set image database channel"
+    help_text += "\n/setdatabase - Set image database (reply to forwarded message)"
+    help_text += "\n/setupidatabase - Set payment notification group (reply to forwarded message)"
     await message.reply_text(help_text)
 
 @Client.on_message(filters.command("stats") & filters.private)
@@ -165,6 +166,31 @@ async def setdatabase_handler(client, message):
         await message.reply_text(f"✅ **Success!**\n\nImage database channel set to `{chat.title}` (`{channel_id}`).\n\nNow you can simply send photos to this bot and assign them to messages.")
     except Exception as e:
         await message.reply_text(f"❌ An error occurred: {e}")
+
+@Client.on_message(filters.command("setupidatabase") & filters.private)
+async def setupidatabase_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    if not message.reply_to_message or not message.reply_to_message.forward_from_chat:
+        await message.reply_text("❌ **Invalid Usage!**\n\nPlease **forward a message** from your payment notification group to this chat, then **reply** to that message with `/setupidatabase`.")
+        return
+
+    channel_id = message.reply_to_message.forward_from_chat.id
+
+    try:
+        chat = await client.get_chat(channel_id)
+        chat_type = str(chat.type).split(".")[-1].lower()
+
+        if chat_type not in ["group", "supergroup", "channel"]:
+            await message.reply_text(f"❌ This belongs to a {chat_type}. Please use a group or channel.")
+            return
+
+        await set_setting("sms_group_id", channel_id)
+        await message.reply_text(f"✅ **Success!**\n\nPayment notification group set to `{chat.title}` (`{channel_id}`).\n\nI will now listen for payments in this group.")
+    except Exception as e:
+        await message.reply_text(f"❌ Could not access group: {e}")
 
 @Client.on_message(filters.private & filters.photo)
 async def admin_photo_handler(client, message):

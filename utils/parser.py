@@ -12,7 +12,11 @@ from database import payments_col
 AMOUNT_REGEX = re.compile(r"(?:INR|Rs\.?|Amount:?|₹)\s*(\d+(?:\.\d{1,2})?)", re.IGNORECASE)
 # Regular expressions for Transaction ID / UTR / Ref No
 # Reordered to match longer strings first to avoid "Txn ID" capturing "ID" as the value
-TXN_ID_REGEX = re.compile(r"(?:Transaction ID|Txn ID|Ref No|Ref|UTR|Txn|ID|No):?\s*([A-Za-z0-9]+)", re.IGNORECASE)
+# Added specific focus on UTR and longer IDs to handle messages with multiple ID types (like FamApp)
+TXN_ID_REGEX = re.compile(r"(?:UTR|Ref No|Ref|Transaction ID|Txn ID|Txn|ID|No):?\s*([A-Za-z0-9]{10,})", re.IGNORECASE)
+
+# Secondary regex specifically for UTR if first one fails to be specific
+UTR_ONLY_REGEX = re.compile(r"UTR\s*:\s*([0-9]+)", re.IGNORECASE)
 
 # More comprehensive pattern for generic Indian bank SMS
 # "credited with INR 199.00. Txn ID: 423567890123"
@@ -24,12 +28,18 @@ def parse_sms(text: str):
     Returns (amount, txn_id) if found, else (None, None).
     """
     amount_match = AMOUNT_REGEX.search(text)
-    txn_id_match = TXN_ID_REGEX.search(text)
 
-    if amount_match and txn_id_match:
+    # Try UTR specific regex first (higher priority for accuracy)
+    utr_match = UTR_ONLY_REGEX.search(text)
+    if utr_match:
+        txn_id = utr_match.group(1)
+    else:
+        txn_id_match = TXN_ID_REGEX.search(text)
+        txn_id = txn_id_match.group(1) if txn_id_match else None
+
+    if amount_match and txn_id:
         try:
             amount = float(amount_match.group(1))
-            txn_id = txn_id_match.group(1)
             return amount, txn_id
         except (ValueError, IndexError):
             pass

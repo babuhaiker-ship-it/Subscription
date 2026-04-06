@@ -26,8 +26,15 @@ app = Client(
 )
 
 # SMS Group Handler - Watch for payments
-@app.on_message(filters.chat(SMS_GROUP_ID) & filters.text, group=-1)
+@app.on_message(filters.text, group=-1)
 async def sms_group_handler(client, message):
+    # Fetch allowed group from settings or fallback to config
+    from database import get_setting
+    allowed_group = await get_setting("sms_group_id") or SMS_GROUP_ID
+
+    if message.chat.id != allowed_group:
+        return
+
     amount, txn_id = parse_sms(message.text)
     if amount and txn_id:
         success, msg = await store_payment(amount, txn_id)
