@@ -28,7 +28,8 @@ async def init_settings():
         "success_img_channel": None,
         "success_img_id": None,
         "instr_img_channel": None,
-        "instr_img_id": None
+        "instr_img_id": None,
+        "img_db_channel": None
     }
     for key, value in default_settings.items():
         await settings_col.update_one({"key": key}, {"$setOnInsert": {"value": value}}, upsert=True)

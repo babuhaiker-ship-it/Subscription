@@ -13,6 +13,7 @@ async def admin_help_handler(client, message):
     help_text = get_string("admin_help", lang=lang)
     if user_id == OWNER_ID:
         help_text += "\n/addadmin <user_id> - Add a new admin (Owner only)"
+    help_text += "\n/setdatabase <channel_id> - Set image database channel"
     await message.reply_text(help_text)
 
 @Client.on_message(filters.command("stats") & filters.private)
@@ -61,24 +62,6 @@ async def setupi_handler(client, message):
     await set_setting("upi_id", new_upi)
     await message.reply_text(f"✅ UPI ID updated to `{new_upi}`")
 
-@Client.on_message(filters.command("setqr") & filters.private)
-async def setqr_handler(client, message):
-    user_id = message.from_user.id
-    if not await is_admin(user_id):
-        return
-
-    if len(message.command) < 3:
-        await message.reply_text("Usage: /setqr <channel_id> <message_id>")
-        return
-
-    try:
-        channel_id = int(message.command[1])
-        message_id = int(message.command[2])
-        await set_setting("qr_channel_id", channel_id)
-        await set_setting("qr_message_id", message_id)
-        await message.reply_text(f"✅ QR source updated to channel `{channel_id}` message `{message_id}`")
-    except ValueError:
-        await message.reply_text("❌ Please enter valid numbers for channel_id and message_id.")
 
 @Client.on_message(filters.private & filters.forwarded)
 async def get_id_handler(client, message):
@@ -145,26 +128,95 @@ async def set_msg_handler(client, message):
     await set_setting(db_key, text)
     await message.reply_text(f"✅ {cmd} for {lang} updated!")
 
-@Client.on_message(filters.command("setimg") & filters.private)
-async def setimg_handler(client, message):
+@Client.on_message(filters.command("setdatabase") & filters.private)
+async def setdatabase_handler(client, message):
     user_id = message.from_user.id
     if not await is_admin(user_id):
         return
 
-    if len(message.command) < 4:
-        await message.reply_text("Usage: /setimg <welcome|success|instr> <channel_id> <message_id>")
-        return
-
-    msg_type = message.command[1]
-    if msg_type not in ["welcome", "success", "instr"]:
-        await message.reply_text("❌ Type must be 'welcome', 'success', or 'instr'.")
+    if len(message.command) < 2:
+        await message.reply_text("Usage: /setdatabase <channel_id>\n\nHint: Forward a message from the channel to get its ID.")
         return
 
     try:
-        channel_id = int(message.command[2])
-        message_id = int(message.command[3])
-        await set_setting(f"{msg_type}_img_channel", channel_id)
-        await set_setting(f"{msg_type}_img_id", message_id)
-        await message.reply_text(f"✅ {msg_type} image updated!")
+        channel_id = int(message.command[1])
+        # Test if bot is admin in channel
+        try:
+            chat = await client.get_chat(channel_id)
+            if chat.type not in ["channel", "group", "supergroup"]:
+                await message.reply_text("❌ This ID belongs to a private chat or bot, not a channel/group.")
+                return
+
+            member = await chat.get_member(client.me.id)
+            if not member.status in ["administrator", "creator"]:
+                await message.reply_text("❌ I must be an administrator in that channel to copy images to it.")
+                return
+
+        except Exception as e:
+            await message.reply_text(f"❌ Could not access channel: {e}\nMake sure I am added to it first.")
+            return
+
+        await set_setting("img_db_channel", channel_id)
+        await message.reply_text(f"✅ Image database channel set to `{chat.title}` (`{channel_id}`)")
     except ValueError:
-        await message.reply_text("❌ Please enter valid numbers for channel_id and message_id.")
+        await message.reply_text("❌ Please enter a valid number for channel_id.")
+
+@Client.on_message(filters.private & filters.photo)
+async def admin_photo_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    # Offer to set this photo as one of the bot images
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("Welcome Image", callback_data="setimg_welcome")],
+        [types.InlineKeyboardButton("Instruction Image", callback_data="setimg_instr")],
+        [types.InlineKeyboardButton("Success Image", callback_data="setimg_success")],
+        [types.InlineKeyboardButton("QR Code Image", callback_data="setimg_qr")]
+    ])
+
+    await message.reply_text(
+        "🖼 **Set this image?**\n\nChoose where you want to show this image:",
+        reply_markup=keyboard,
+        quote=True
+    )
+
+@Client.on_callback_query(filters.regex("^setimg_"))
+async def setimg_callback_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    msg_type = callback_query.data.split("_")[-1]
+
+    # Get the image DB channel
+    db_channel = await get_setting("img_db_channel")
+    if not db_channel:
+        await callback_query.answer("❌ Please set an image database channel first using /setdatabase.", show_alert=True)
+        return
+
+    # Check if we have the message with photo (it's the message being replied to)
+    # The callback_query.message is the "Set this image?" message.
+    # The message with photo is the one before it.
+
+    photo_msg = callback_query.message.reply_to_message
+    if not photo_msg or not photo_msg.photo:
+        await callback_query.answer("❌ Error: Could not find the original image message.", show_alert=True)
+        return
+
+    try:
+        # Copy photo to database channel
+        copied_msg = await photo_msg.copy(db_channel)
+
+        # Save new IDs
+        if msg_type == "qr":
+            await set_setting("qr_channel_id", db_channel)
+            await set_setting("qr_message_id", copied_msg.id)
+        else:
+            await set_setting(f"{msg_type}_img_channel", db_channel)
+            await set_setting(f"{msg_type}_img_id", copied_msg.id)
+
+        await callback_query.edit_message_text(f"✅ Success! This image is now set as the **{msg_type}** image.")
+        await callback_query.answer(f"{msg_type} image updated!")
+    except Exception as e:
+        await callback_query.answer(f"❌ Failed to copy image: {e}", show_alert=True)
