@@ -33,22 +33,12 @@ async def payment_submission_handler(client, message):
     lang = await get_user_lang(user_id)
     price = await get_setting("price", 199)
 
-    # Try to extract txn_id and amount from user message
-    parts = message.text.strip().split()
-    if len(parts) < 2:
-        await message.reply_text(get_string("error_invalid_format", lang=lang, price=price))
-        return
+    # User sends only the Transaction ID / UTR now
+    user_txn_id = message.text.strip()
 
-    user_txn_id = parts[0]
-    try:
-        user_amount = float(parts[1])
-    except ValueError:
+    # Basic validation: Indian UPI UTRs are usually 12 digits, but we can be flexible
+    if not user_txn_id or len(user_txn_id) < 8:
         await message.reply_text(get_string("error_invalid_format", lang=lang, price=price))
-        return
-
-    # User input validation
-    if user_amount != float(price):
-        await message.reply_text(get_string("error_amount", lang=lang, price=price))
         return
 
     # Bot verification message
@@ -64,7 +54,7 @@ async def payment_submission_handler(client, message):
 
     query = {
         "txn_id": user_txn_id,
-        "amount": user_amount,
+        "amount": float(price), # We match against the bot's current price
         "is_claimed": False,
         "received_at": {"$gte": one_day_ago}
     }
@@ -125,7 +115,7 @@ async def payment_submission_handler(client, message):
             error_text = get_string("error_claimed", lang=lang)
         elif existing_payment.get("received_at") < one_day_ago:
             error_text = get_string("error_expired", lang=lang)
-        elif existing_payment.get("amount") != user_amount:
+        elif existing_payment.get("amount") != float(price):
             error_text = get_string("error_amount", lang=lang, price=price)
         else:
             error_text = get_string("error_not_found", lang=lang)
