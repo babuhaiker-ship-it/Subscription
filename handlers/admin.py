@@ -144,13 +144,17 @@ async def setdatabase_handler(client, message):
         # Test if bot is admin in channel
         try:
             chat = await client.get_chat(channel_id)
-            if chat.type not in ["channel", "group", "supergroup"]:
-                await message.reply_text("❌ This belongs to a private chat or bot, not a channel/group.")
+            chat_type = str(chat.type).split(".")[-1].lower() # Handle Enum to string
+
+            if chat_type not in ["channel", "group", "supergroup"]:
+                await message.reply_text(f"❌ This belongs to a {chat_type}, not a channel or group.")
                 return
 
             member = await chat.get_member(client.me.id)
-            if not member.status in ["administrator", "creator"]:
-                await message.reply_text("❌ I must be an administrator in that channel to copy images to it.")
+            member_status = str(member.status).split(".")[-1].lower() # Handle Enum to string
+
+            if member_status not in ["administrator", "owner", "creator"]:
+                await message.reply_text(f"❌ I am a {member_status} in that channel. I must be an **administrator**.")
                 return
 
         except Exception as e:
