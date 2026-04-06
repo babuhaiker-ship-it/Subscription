@@ -9,8 +9,6 @@ except RuntimeError:
 
 from pyrogram import Client, filters, idle
 from aiohttp import web
-import os
-import sys
 
 # Import config, db and handlers
 from config import API_ID, API_HASH, BOT_TOKEN, SMS_GROUP_ID, PORT, MONGO_URI, DB_NAME

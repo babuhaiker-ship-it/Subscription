@@ -134,17 +134,18 @@ async def setdatabase_handler(client, message):
     if not await is_admin(user_id):
         return
 
-    if len(message.command) < 2:
-        await message.reply_text("Usage: /setdatabase <channel_id>\n\nHint: Forward a message from the channel to get its ID.")
+    if not message.reply_to_message or not message.reply_to_message.forward_from_chat:
+        await message.reply_text("❌ **Invalid Usage!**\n\nPlease **forward a message** from your database channel/group to this chat, then **reply** to that forwarded message with `/setdatabase`.")
         return
 
+    channel_id = message.reply_to_message.forward_from_chat.id
+
     try:
-        channel_id = int(message.command[1])
         # Test if bot is admin in channel
         try:
             chat = await client.get_chat(channel_id)
             if chat.type not in ["channel", "group", "supergroup"]:
-                await message.reply_text("❌ This ID belongs to a private chat or bot, not a channel/group.")
+                await message.reply_text("❌ This belongs to a private chat or bot, not a channel/group.")
                 return
 
             member = await chat.get_member(client.me.id)
@@ -153,13 +154,13 @@ async def setdatabase_handler(client, message):
                 return
 
         except Exception as e:
-            await message.reply_text(f"❌ Could not access channel: {e}\nMake sure I am added to it first.")
+            await message.reply_text(f"❌ Could not access channel: {e}\nMake sure I am added to it first and that it's a channel or group.")
             return
 
         await set_setting("img_db_channel", channel_id)
-        await message.reply_text(f"✅ Image database channel set to `{chat.title}` (`{channel_id}`)")
-    except ValueError:
-        await message.reply_text("❌ Please enter a valid number for channel_id.")
+        await message.reply_text(f"✅ **Success!**\n\nImage database channel set to `{chat.title}` (`{channel_id}`).\n\nNow you can simply send photos to this bot and assign them to messages.")
+    except Exception as e:
+        await message.reply_text(f"❌ An error occurred: {e}")
 
 @Client.on_message(filters.private & filters.photo)
 async def admin_photo_handler(client, message):
