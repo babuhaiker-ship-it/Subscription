@@ -1,9 +1,13 @@
 from pyrogram import Client, filters, types
-from database import users_col, payments_col, get_setting
+from database import users_col, payments_col, get_setting, main_tokens_col
 from utils.localization import get_string
 from datetime import datetime, timedelta
 import pytz
 import asyncio
+import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Helper to get user's language
 from handlers.user import get_user_lang
@@ -98,6 +102,22 @@ async def payment_submission_handler(client, message):
                 }
             }
         )
+
+        # Sync with main bot's database
+        token_doc = {
+            'token_id': str(uuid.uuid4()),
+            'created_at': datetime.now(pytz.utc),
+            'expires_at': premium_expiry,
+            'is_admin_granted': True
+        }
+        try:
+            await main_tokens_col.update_one(
+                {'user_id': user_id},
+                {'$push': {'tokens': token_doc}},
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"Failed to write premium token to main bot DB for user {user_id}: {e}")
 
         success_text = await get_setting(f"success_msg_{lang}", get_string("success", lang=lang))
 
