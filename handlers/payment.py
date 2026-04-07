@@ -71,6 +71,9 @@ async def payment_submission_handler(client, message):
     claimed_payment = await payments_col.find_one_and_update(query, update)
 
     if claimed_payment:
+        import uuid
+        from database import main_tokens_col
+
         # If this payment is part of a group (multiple IDs for same SMS), claim them all
         group_id = claimed_payment.get("group_id")
         if group_id:
@@ -98,6 +101,23 @@ async def payment_submission_handler(client, message):
                 }
             }
         )
+
+        # Grant Premium in Main Bot
+        if main_tokens_col is not None:
+            try:
+                token_doc = {
+                    'token_id': str(uuid.uuid4()),
+                    'expires_at': premium_expiry,
+                    'is_admin_granted': True
+                }
+                await main_tokens_col.update_one(
+                    {'user_id': user_id},
+                    {'$push': {'tokens': token_doc}},
+                    upsert=True
+                )
+                print(f"✅ Premium token pushed to Main Bot for user {user_id}")
+            except Exception as e:
+                print(f"❌ Failed to push premium token to Main Bot: {e}")
 
         success_text = await get_setting(f"success_msg_{lang}", get_string("success", lang=lang))
 
