@@ -1,7 +1,7 @@
 pyrogram
-python-telegram-bot
-pymongo
-aiohttp
-shortzy
-pytz
 motor
+aiohttp
+pytz
+shortzy
+python-dotenv
+tgcrypto

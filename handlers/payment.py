@@ -1,0 +1,143 @@
+from pyrogram import Client, filters, types
+from database import users_col, payments_col, get_setting
+from utils.localization import get_string
+from datetime import datetime, timedelta
+import pytz
+import asyncio
+
+# Helper to get user's language
+from handlers.user import get_user_lang
+
+@Client.on_callback_query(filters.regex("^i_have_paid$"))
+async def i_have_paid_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    lang = await get_user_lang(user_id)
+    price = await get_setting("price", 199)
+
+    ask_txn_text = get_string("ask_txn", lang=lang, price=price)
+
+    # Update user state to 'awaiting_payment'
+    await users_col.update_one({"user_id": user_id}, {"$set": {"state": "awaiting_payment"}})
+
+    await callback_query.message.reply_text(ask_txn_text)
+    await callback_query.answer()
+
+@Client.on_message(filters.private & filters.text & ~filters.command(["start", "admin", "stats", "setprice", "setupi", "setqr", "help", "help_admin", "setwelcome", "setsuccess", "setinstr", "addadmin"]))
+async def payment_submission_handler(client, message):
+    user_id = message.from_user.id
+    user = await users_col.find_one({"user_id": user_id})
+
+    if not user or user.get("state") != "awaiting_payment":
+        return
+
+    lang = await get_user_lang(user_id)
+    price = await get_setting("price", 199)
+
+    # User sends only the Transaction ID / UTR now
+    user_txn_id = message.text.strip()
+
+    # Basic validation: Indian UPI UTRs are usually 12 digits, but we can be flexible
+    if not user_txn_id or len(user_txn_id) < 8:
+        await message.reply_text(get_string("error_invalid_format", lang=lang, price=price))
+        return
+
+    # Bot verification message
+    verifying_msg = await message.reply_text(get_string("verifying", lang=lang))
+    await asyncio.sleep(2) # Human-like delay
+
+    # Atomic find and claim operation
+    # 1. Find a payment that matches the txn_id and amount
+    # 2. Check if it's already claimed
+    # 3. Check if it's not older than 24 hours
+
+    one_day_ago = datetime.now(pytz.utc) - timedelta(hours=24)
+
+    query = {
+        "txn_id": user_txn_id,
+        "amount": float(price), # We match against the bot's current price
+        "is_claimed": False,
+        "received_at": {"$gte": one_day_ago}
+    }
+
+    update = {
+        "$set": {
+            "is_claimed": True,
+            "claimed_by": user_id,
+            "claimed_at": datetime.now(pytz.utc)
+        }
+    }
+
+    # Atomically find and update the payment record
+    claimed_payment = await payments_col.find_one_and_update(query, update)
+
+    if claimed_payment:
+        import uuid
+        from database import main_tokens_col
+
+        # If this payment is part of a group (multiple IDs for same SMS), claim them all
+        group_id = claimed_payment.get("group_id")
+        if group_id:
+            await payments_col.update_many(
+                {"group_id": group_id, "is_claimed": False},
+                {
+                    "$set": {
+                        "is_claimed": True,
+                        "claimed_by": user_id,
+                        "claimed_at": datetime.now(pytz.utc)
+                    }
+                }
+            )
+
+        # Payment found and claimed! Grant premium
+        premium_expiry = datetime.now(pytz.utc) + timedelta(days=30)
+
+        await users_col.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "is_premium": True,
+                    "premium_until": premium_expiry,
+                    "state": None # Clear state
+                }
+            }
+        )
+
+        # Grant Premium in Main Bot
+        if main_tokens_col is not None:
+            try:
+                token_doc = {
+                    'token_id': str(uuid.uuid4()),
+                    'expires_at': premium_expiry,
+                    'is_admin_granted': True
+                }
+                await main_tokens_col.update_one(
+                    {'user_id': user_id},
+                    {'$push': {'tokens': token_doc}},
+                    upsert=True
+                )
+                print(f"✅ Premium token pushed to Main Bot for user {user_id}")
+            except Exception as e:
+                print(f"❌ Failed to push premium token to Main Bot: {e}")
+
+        success_text = await get_setting(f"success_msg_{lang}", get_string("success", lang=lang))
+
+        # Check for success image
+        from handlers.user import send_custom_msg
+        await verifying_msg.delete()
+        await send_custom_msg(client, user_id, "success", success_text)
+    else:
+        # Check why it failed for better error message
+        existing_payment = await payments_col.find_one({"txn_id": user_txn_id})
+
+        if not existing_payment:
+            error_text = get_string("error_not_found", lang=lang)
+        elif existing_payment.get("is_claimed"):
+            error_text = get_string("error_claimed", lang=lang)
+        elif existing_payment.get("received_at") < one_day_ago:
+            error_text = get_string("error_expired", lang=lang)
+        elif existing_payment.get("amount") != float(price):
+            error_text = get_string("error_amount", lang=lang, price=price)
+        else:
+            error_text = get_string("error_not_found", lang=lang)
+
+        await verifying_msg.edit_text(error_text)
