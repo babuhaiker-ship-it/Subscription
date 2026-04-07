@@ -1,5 +1,5 @@
 from pyrogram import Client, filters, types
-from database import users_col, payments_col, get_setting, main_tokens_col
+from database import users_col, payments_col, get_setting, main_tokens_col, plans_col
 from utils.localization import get_string
 from datetime import datetime, timedelta
 import pytz
@@ -16,7 +16,12 @@ from handlers.user import get_user_lang
 async def i_have_paid_handler(client, callback_query):
     user_id = callback_query.from_user.id
     lang = await get_user_lang(user_id)
-    price = await get_setting("price", 199)
+
+    user = await users_col.find_one({"user_id": user_id})
+    plan_id = user.get("selected_plan_id")
+    plan = await plans_col.find_one({"plan_id": plan_id}) if plan_id else None
+
+    price = plan["price"] if plan else await get_setting("price", 199)
 
     ask_txn_text = get_string("ask_txn", lang=lang, price=price)
 
@@ -26,7 +31,7 @@ async def i_have_paid_handler(client, callback_query):
     await callback_query.message.reply_text(ask_txn_text)
     await callback_query.answer()
 
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "admin", "stats", "setprice", "setupi", "setqr", "help", "help_admin", "setwelcome", "setsuccess", "setinstr", "addadmin"]))
+@Client.on_message(filters.private & filters.text & ~filters.command(["start", "admin", "stats", "setprice", "setupi", "setqr", "help", "help_admin", "setwelcome", "setsuccess", "setinstr", "addadmin", "managesub"]))
 async def payment_submission_handler(client, message):
     user_id = message.from_user.id
     user = await users_col.find_one({"user_id": user_id})
@@ -35,7 +40,12 @@ async def payment_submission_handler(client, message):
         return
 
     lang = await get_user_lang(user_id)
-    price = await get_setting("price", 199)
+
+    plan_id = user.get("selected_plan_id")
+    plan = await plans_col.find_one({"plan_id": plan_id}) if plan_id else None
+
+    price = plan["price"] if plan else await get_setting("price", 199)
+    days = plan["days"] if plan else 30
 
     # User sends only the Transaction ID / UTR now
     user_txn_id = message.text.strip()
@@ -90,7 +100,7 @@ async def payment_submission_handler(client, message):
             )
 
         # Payment found and claimed! Grant premium
-        premium_expiry = datetime.now(pytz.utc) + timedelta(days=30)
+        premium_expiry = datetime.now(pytz.utc) + timedelta(days=days)
 
         await users_col.update_one(
             {"user_id": user_id},
@@ -110,14 +120,17 @@ async def payment_submission_handler(client, message):
             'expires_at': premium_expiry,
             'is_admin_granted': True
         }
-        try:
-            await main_tokens_col.update_one(
-                {'user_id': user_id},
-                {'$push': {'tokens': token_doc}},
-                upsert=True
-            )
-        except Exception as e:
-            logger.error(f"Failed to write premium token to main bot DB for user {user_id}: {e}")
+        if main_tokens_col is not None:
+            try:
+                await main_tokens_col.update_one(
+                    {'user_id': user_id},
+                    {'$push': {'tokens': token_doc}},
+                    upsert=True
+                )
+            except Exception as e:
+                logger.error(f"Failed to write premium token to main bot DB for user {user_id}: {e}")
+        else:
+            logger.warning(f"Main bot DB not configured, skipping sync for user {user_id}")
 
         success_text = await get_setting(f"success_msg_{lang}", get_string("success", lang=lang))
 

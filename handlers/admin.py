@@ -1,7 +1,8 @@
 from pyrogram import Client, filters, types
-from database import is_admin, add_admin, get_db_stats, set_setting, get_setting, OWNER_ID
+from database import is_admin, add_admin, get_db_stats, set_setting, get_setting, OWNER_ID, plans_col, users_col
 from utils.localization import get_string
 from handlers.user import get_user_lang
+import uuid
 
 @Client.on_message(filters.command(["admin", "help_admin"]) & filters.private)
 async def admin_help_handler(client, message):
@@ -16,6 +17,7 @@ async def admin_help_handler(client, message):
     help_text += "\n/setdatabase - Set image database (reply to forwarded message)"
     help_text += "\n/setupidatabase - Set payment notification group (reply to forwarded message)"
     help_text += "\n/debug - View current bot configuration"
+    help_text += "\n/managesub - Manage subscription plans"
     help_text += "\n/addpayment <txn_id> <amount> - Manually add a payment record"
     await message.reply_text(help_text)
 
@@ -318,3 +320,226 @@ async def setimg_callback_handler(client, callback_query):
         await callback_query.answer(f"{msg_type} image updated!")
     except Exception as e:
         await callback_query.answer(f"❌ Failed to copy image: {e}", show_alert=True)
+
+# Plan Management Section
+
+@Client.on_message(filters.command("managesub") & filters.private)
+async def managesub_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("➕ Add Plan", callback_data="admin_add_plan")],
+        [types.InlineKeyboardButton("📜 List Plans", callback_data="admin_list_plans")]
+    ])
+    await message.reply_text("💎 **Subscription Management**\n\nChoose an action:", reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_managesub_back$"))
+async def admin_managesub_back_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    # Clear temp plan when going back to main menu
+    await users_col.update_one({"user_id": user_id}, {"$unset": {"temp_plan": "", "state": ""}})
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("➕ Add Plan", callback_data="admin_add_plan")],
+        [types.InlineKeyboardButton("📜 List Plans", callback_data="admin_list_plans")]
+    ])
+    await callback_query.edit_message_text("💎 **Subscription Management**\n\nChoose an action:", reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_add_plan$"))
+async def admin_add_plan_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    # Initialize temp plan if not already present
+    user = await users_col.find_one({"user_id": user_id})
+    if not user or "temp_plan" not in user:
+        temp_plan = {"name": None, "days": None, "price": None}
+        await users_col.update_one({"user_id": user_id}, {"$set": {"temp_plan": temp_plan, "state": None}})
+
+    await show_plan_creation_menu(callback_query.message, user_id)
+
+async def show_plan_creation_menu(message, user_id):
+    user = await users_col.find_one({"user_id": user_id})
+    temp = user.get("temp_plan", {})
+
+    name_text = f"✅ Name: {temp.get('name')}" if temp.get('name') else "❌ Name"
+    days_text = f"✅ Days: {temp.get('days')}" if temp.get('days') else "❌ Days"
+    price_text = f"✅ Price: {temp.get('price')}" if temp.get('price') else "❌ Price"
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton(name_text, callback_data="admin_set_plan_name")],
+        [types.InlineKeyboardButton(days_text, callback_data="admin_set_plan_days")],
+        [types.InlineKeyboardButton(price_text, callback_data="admin_set_plan_price")],
+        [types.InlineKeyboardButton("✔️ Confirm", callback_data="admin_confirm_plan")],
+        [types.InlineKeyboardButton("🔙 Back", callback_data="admin_managesub_back")]
+    ])
+
+    text = "🛠 **Plan Editor**\n\nFill all details below and click Confirm."
+    await message.edit_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_set_plan_"))
+async def admin_set_plan_field_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    field = callback_query.data.split("_")[-1]
+    await users_col.update_one({"user_id": user_id}, {"$set": {"state": f"admin_setting_plan_{field}"}})
+
+    await callback_query.answer(f"Please send the {field} now.", show_alert=True)
+
+@Client.on_callback_query(filters.regex("^admin_confirm_plan$"))
+async def admin_confirm_plan_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    user = await users_col.find_one({"user_id": user_id})
+    temp = user.get("temp_plan", {})
+
+    if not all([temp.get("name"), temp.get("days"), temp.get("price")]):
+        await callback_query.answer("❌ Please fill all details first!", show_alert=True)
+        return
+
+    plan_id = temp.get("plan_id") or str(uuid.uuid4())[:8]
+
+    plan_doc = {
+        "plan_id": plan_id,
+        "name": temp["name"],
+        "days": temp["days"],
+        "price": float(temp["price"])
+    }
+
+    await plans_col.update_one({"plan_id": plan_id}, {"$set": plan_doc}, upsert=True)
+    await users_col.update_one({"user_id": user_id}, {"$unset": {"temp_plan": "", "state": ""}})
+
+    await callback_query.answer("✅ Plan saved successfully!", show_alert=True)
+    await admin_managesub_back_callback(client, callback_query)
+
+@Client.on_callback_query(filters.regex("^admin_list_plans$"))
+async def admin_list_plans_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    plans = await plans_col.find().to_list(100)
+    if not plans:
+        await callback_query.answer("No plans found.", show_alert=True)
+        return
+
+    keyboard = []
+    for plan in plans:
+        keyboard.append([
+            types.InlineKeyboardButton(f"{plan['name']} (₹{plan['price']})", callback_data=f"admin_view_plan_{plan['plan_id']}")
+        ])
+
+    keyboard.append([types.InlineKeyboardButton("🔙 Back", callback_data="admin_managesub_back")])
+
+    await callback_query.edit_message_text("📜 **Existing Plans:**\n\nClick on a plan to edit or delete it.", reply_markup=types.InlineKeyboardMarkup(keyboard))
+
+@Client.on_callback_query(filters.regex("^admin_view_plan_"))
+async def admin_view_plan_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    plan_id = callback_query.data.split("_")[-1]
+    plan = await plans_col.find_one({"plan_id": plan_id})
+
+    if not plan:
+        await callback_query.answer("Plan not found.", show_alert=True)
+        return
+
+    text = f"💎 **Plan Details:**\n\n"
+    text += f"🏷 **Name:** {plan['name']}\n"
+    text += f"📅 **Days:** {plan['days']}\n"
+    text += f"💰 **Price:** ₹{plan['price']}\n"
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("📝 Edit", callback_data=f"admin_edit_plan_{plan_id}")],
+        [types.InlineKeyboardButton("🗑 Delete", callback_data=f"admin_delete_plan_{plan_id}")],
+        [types.InlineKeyboardButton("🔙 Back", callback_data="admin_list_plans")]
+    ])
+
+    await callback_query.edit_message_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_edit_plan_"))
+async def admin_edit_plan_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    plan_id = callback_query.data.split("_")[-1]
+    plan = await plans_col.find_one({"plan_id": plan_id})
+
+    if not plan:
+        await callback_query.answer("Plan not found.", show_alert=True)
+        return
+
+    temp_plan = {
+        "plan_id": plan["plan_id"],
+        "name": plan["name"],
+        "days": plan["days"],
+        "price": plan["price"]
+    }
+
+    await users_col.update_one({"user_id": user_id}, {"$set": {"temp_plan": temp_plan, "state": None}})
+    await show_plan_creation_menu(callback_query.message, user_id)
+
+@Client.on_callback_query(filters.regex("^admin_delete_plan_"))
+async def admin_delete_plan_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    plan_id = callback_query.data.split("_")[-1]
+    await plans_col.delete_one({"plan_id": plan_id})
+
+    await callback_query.answer("✅ Plan deleted!", show_alert=True)
+    await admin_list_plans_callback(client, callback_query)
+
+# Input handler for admin settings
+@Client.on_message(filters.private & filters.text, group=1)
+async def admin_input_handler(client, message):
+    user_id = message.from_user.id
+    user = await users_col.find_one({"user_id": user_id})
+
+    if not user or not user.get("state") or not user.get("state").startswith("admin_setting_plan_"):
+        return
+
+    if not await is_admin(user_id):
+        return
+
+    state = user["state"]
+    field = state.split("_")[-1]
+    text = message.text.strip()
+    temp = user.get("temp_plan", {})
+
+    if field == "name":
+        temp["name"] = text
+    elif field == "days":
+        if not text.isdigit():
+            await message.reply_text("❌ Please enter a valid number for days.")
+            return
+        temp["days"] = int(text)
+    elif field == "price":
+        try:
+            temp["price"] = float(text)
+        except ValueError:
+            await message.reply_text("❌ Please enter a valid number for price.")
+            return
+
+    await users_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"temp_plan": temp, "state": None}}
+    )
+
+    # To keep it interactive, we can send the menu again
+    keyboard = types.InlineKeyboardMarkup([[types.InlineKeyboardButton("🔙 Back to Plan Editor", callback_data="admin_add_plan")]])
+    await message.reply_text(f"✅ Set {field} to: `{text}`", reply_markup=keyboard)
