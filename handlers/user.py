@@ -107,10 +107,10 @@ async def select_plan_handler(client, callback_query):
     # Store selected plan in user doc
     await users_col.update_one({"user_id": user_id}, {"$set": {"selected_plan_id": plan_id}})
 
-    await show_payment_instructions(client, user_id, lang, plan["price"])
+    await show_payment_instructions(client, user_id, lang, plan["price"], plan)
     await callback_query.message.delete()
 
-async def show_payment_instructions(client, user_id, lang, price):
+async def show_payment_instructions(client, user_id, lang, price, plan=None):
     upi_id = await get_setting("upi_id", "example@upi")
 
     pay_text = await get_setting(f"pay_instr_{lang}", get_string("pay_instr", lang=lang, price=price, upi_id=upi_id))
@@ -124,9 +124,17 @@ async def show_payment_instructions(client, user_id, lang, price):
         [types.InlineKeyboardButton(get_string("btn_i_have_paid", lang=lang), callback_data="i_have_paid")]
     ])
 
-    # Check for instr image or fallback to QR image
-    instr_channel = await get_setting("instr_img_channel")
-    instr_id = await get_setting("instr_img_id")
+    # Prioritize: Plan-specific QR > Instruction Image > Global QR
+    instr_channel = None
+    instr_id = None
+
+    if plan:
+        instr_channel = plan.get("qr_channel_id")
+        instr_id = plan.get("qr_message_id")
+
+    if not instr_channel:
+        instr_channel = await get_setting("instr_img_channel")
+        instr_id = await get_setting("instr_img_id")
 
     if not instr_channel:
         instr_channel = await get_setting("qr_channel_id")

@@ -310,16 +310,52 @@ async def setimg_callback_handler(client, callback_query):
 
         # Save new IDs
         if msg_type == "qr":
-            await set_setting("qr_channel_id", db_channel)
-            await set_setting("qr_message_id", copied_msg.id)
+            # Ask which plan to assign this QR to
+            plans = await plans_col.find().to_list(100)
+            keyboard = []
+            for plan in plans:
+                keyboard.append([
+                    types.InlineKeyboardButton(f"Plan: {plan['name']}", callback_data=f"admin_assignqr_{plan['plan_id']}_{copied_msg.id}")
+                ])
+            keyboard.append([types.InlineKeyboardButton("Global QR (Default)", callback_data=f"admin_assignqr_global_{copied_msg.id}")])
+
+            await callback_query.edit_message_text(
+                "🎯 **Assign QR Code**\n\nWhich plan is this QR code for?",
+                reply_markup=types.InlineKeyboardMarkup(keyboard)
+            )
         else:
             await set_setting(f"{msg_type}_img_channel", db_channel)
             await set_setting(f"{msg_type}_img_id", copied_msg.id)
-
-        await callback_query.edit_message_text(f"✅ Success! This image is now set as the **{msg_type}** image.")
-        await callback_query.answer(f"{msg_type} image updated!")
+            await callback_query.edit_message_text(f"✅ Success! This image is now set as the **{msg_type}** image.")
+            await callback_query.answer(f"{msg_type} image updated!")
     except Exception as e:
         await callback_query.answer(f"❌ Failed to copy image: {e}", show_alert=True)
+
+@Client.on_callback_query(filters.regex("^admin_assignqr_"))
+async def admin_assignqr_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    data = callback_query.data.split("_")
+    plan_id = data[2]
+    msg_id = int(data[3])
+
+    db_channel = await get_setting("img_db_channel")
+
+    if plan_id == "global":
+        await set_setting("qr_channel_id", db_channel)
+        await set_setting("qr_message_id", msg_id)
+        await callback_query.edit_message_text("✅ Success! This image is now set as the **Global QR Code**.")
+    else:
+        await plans_col.update_one(
+            {"plan_id": plan_id},
+            {"$set": {"qr_channel_id": db_channel, "qr_message_id": msg_id}}
+        )
+        plan = await plans_col.find_one({"plan_id": plan_id})
+        await callback_query.edit_message_text(f"✅ Success! This image is now set as the QR code for plan: **{plan['name']}**.")
+
+    await callback_query.answer("QR Code assigned!")
 
 # Plan Management Section
 
