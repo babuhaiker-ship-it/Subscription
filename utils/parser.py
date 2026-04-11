@@ -13,7 +13,7 @@ AMOUNT_REGEX = re.compile(r"(?:INR|Rs\.?|Amount:?|₹)\s*(\d+(?:\.\d{1,2})?)", r
 # Regular expressions for Transaction ID / UTR / Ref No
 # Reordered to match longer strings first to avoid "Txn ID" capturing "ID" as the value
 # Added specific focus on UTR and longer IDs to handle messages with multiple ID types (like FamApp)
-TXN_ID_REGEX = re.compile(r"(?:UTR|Ref No|Ref|Transaction ID|Txn ID|Txn|ID|No):?\s*([A-Za-z0-9]{10,})", re.IGNORECASE)
+TXN_ID_REGEX = re.compile(r"(?:UTR|Ref No|Ref|Transaction ID|Txn ID|Txn|ID|No):?[\s\:]*([A-Za-z0-9]{8,})", re.IGNORECASE)
 
 # Secondary regex specifically for UTR if first one fails to be specific
 UTR_ONLY_REGEX = re.compile(r"UTR\s*:\s*([0-9]+)", re.IGNORECASE)
@@ -27,6 +27,8 @@ def parse_sms(text: str):
     Parses SMS text to extract amount and transaction ID.
     Returns (amount, [txn_ids]) if found, else (None, []).
     """
+    # Normalize text by removing asterisks and separators
+    text = re.sub(r'[\*\-\=]', ' ', text)
     amount_match = AMOUNT_REGEX.search(text)
     if not amount_match:
         return None, []
