@@ -18,6 +18,7 @@ async def admin_help_handler(client, message):
     help_text += "\n/setupidatabase - Set payment notification group (reply to forwarded message)"
     help_text += "\n/debug - View current bot configuration"
     help_text += "\n/managesub - Manage subscription plans"
+    help_text += "\n/premiumusers - List all premium users"
     help_text += "\n/addpayment <txn_id> <amount> - Manually add a payment record"
     await message.reply_text(help_text)
 
@@ -236,6 +237,39 @@ async def debug_handler(client, message):
     debug_text += f"👑 **Owner ID:** `{OWNER_ID}`\n"
 
     await message.reply_text(debug_text)
+
+@Client.on_message(filters.command("premiumusers") & filters.private)
+async def premium_users_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    premium_users = await users_col.find({"is_premium": True}).to_list(1000)
+
+    if not premium_users:
+        await message.reply_text("ℹ️ No premium users found.")
+        return
+
+    text = "💎 **Premium Users List:**\n\n"
+    for user in premium_users:
+        uid = user.get("user_id")
+        # Try to get username if available in the database, otherwise show N/A
+        # We don't have username in users_col yet, but we can try to fetch it from the bot
+        try:
+            chat = await client.get_chat(uid)
+            username = f"@{chat.username}" if chat.username else f"[{chat.first_name}](tg://user?id={uid})"
+        except:
+            username = "Unknown User"
+
+        line = f"• {username} (`{uid}`)\n"
+
+        if len(text) + len(line) > 4000:
+            await message.reply_text(text)
+            text = "💎 **Premium Users List (Continued):**\n\n"
+
+        text += line
+
+    await message.reply_text(text)
 
 @Client.on_message(filters.command("addpayment") & filters.private)
 async def add_payment_handler(client, message):
