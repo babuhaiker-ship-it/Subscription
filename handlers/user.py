@@ -1,5 +1,5 @@
 from pyrogram import Client, filters, types
-from database import users_col, get_setting, is_admin, OWNER_ID
+from database import users_col, get_setting, is_admin, OWNER_ID, plans_col
 from utils.localization import get_string
 import asyncio
 
@@ -73,22 +73,68 @@ async def get_premium_handler(client, callback_query):
     user_id = callback_query.from_user.id
     lang = await get_user_lang(user_id)
 
-    price = await get_setting("price", 199)
+    plans = await plans_col.find().to_list(100)
+
+    if plans:
+        # Show plan selection
+        keyboard = []
+        for plan in plans:
+            keyboard.append([
+                types.InlineKeyboardButton(f"{plan['name']} - ₹{plan['price']}", callback_data=f"select_plan_{plan['plan_id']}")
+            ])
+
+        await callback_query.edit_message_text(
+            get_string("select_plan", lang=lang),
+            reply_markup=types.InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        # Fallback to default price
+        price = await get_setting("price", 199)
+        await show_payment_instructions(client, user_id, lang, price)
+        await callback_query.message.delete()
+
+@Client.on_callback_query(filters.regex("^select_plan_"))
+async def select_plan_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    lang = await get_user_lang(user_id)
+    plan_id = callback_query.data.split("_")[-1]
+
+    plan = await plans_col.find_one({"plan_id": plan_id})
+    if not plan:
+        await callback_query.answer("Plan not found.", show_alert=True)
+        return
+
+    # Store selected plan in user doc
+    await users_col.update_one({"user_id": user_id}, {"$set": {"selected_plan_id": plan_id}})
+
+    await show_payment_instructions(client, user_id, lang, plan["price"], plan)
+    await callback_query.message.delete()
+
+async def show_payment_instructions(client, user_id, lang, price, plan=None):
     upi_id = await get_setting("upi_id", "example@upi")
 
     pay_text = await get_setting(f"pay_instr_{lang}", get_string("pay_instr", lang=lang, price=price, upi_id=upi_id))
     if "{price}" in pay_text or "{upi_id}" in pay_text:
-        pay_text = pay_text.format(price=price, upi_id=upi_id)
+        try:
+            pay_text = pay_text.format(price=price, upi_id=upi_id)
+        except:
+            pass
+
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_i_have_paid", lang=lang), callback_data="i_have_paid")]
     ])
 
-    # Delete previous message to resend with possible image
-    await callback_query.message.delete()
+    # Prioritize: Plan-specific QR > Instruction Image > Global QR
+    instr_channel = None
+    instr_id = None
 
-    # Check for instr image or fallback to QR image
-    instr_channel = await get_setting("instr_img_channel")
-    instr_id = await get_setting("instr_img_id")
+    if plan:
+        instr_channel = plan.get("qr_channel_id")
+        instr_id = plan.get("qr_message_id")
+
+    if not instr_channel:
+        instr_channel = await get_setting("instr_img_channel")
+        instr_id = await get_setting("instr_img_id")
 
     if not instr_channel:
         instr_channel = await get_setting("qr_channel_id")
@@ -96,12 +142,8 @@ async def get_premium_handler(client, callback_query):
 
     sent_msg = await send_custom_msg(client, user_id, "instr", pay_text, reply_markup=keyboard)
 
-    # Fallback to QR code if no specific instruction image was sent
-    # Note: send_custom_msg will only return a copied message if instr_img_channel is set.
-    # We want to check if it sent a plain message (without image) and then try the QR fallback.
     if sent_msg and not getattr(sent_msg, "photo", None) and instr_channel and instr_id:
         try:
-            # Delete the plain message and send the QR image instead
             await sent_msg.delete()
             sent_msg = await client.copy_message(
                 chat_id=user_id,
@@ -112,11 +154,8 @@ async def get_premium_handler(client, callback_query):
             )
         except Exception as e:
             print(f"Error copying instruction/QR code: {e}")
-            # If copying fails, we've already sent a plain message previously (sent_msg)
 
-    # Auto-delete instruction after 10 minutes (600 seconds)
     if sent_msg:
-        # Create a task so we don't block the handler thread
         asyncio.create_task(delete_after(sent_msg, 600))
 
 async def delete_after(message, delay):

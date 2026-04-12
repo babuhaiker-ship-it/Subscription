@@ -1,12 +1,15 @@
 import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
-from config import MONGO_URI, DB_NAME, DEFAULT_PRICE, DEFAULT_UPI_ID, DEFAULT_QR_URL, OWNER_ID
+from config import MONGO_URI, DB_NAME, MAIN_BOT_DB_NAME, DEFAULT_PRICE, DEFAULT_UPI_ID, DEFAULT_QR_URL, OWNER_ID
 
 client = AsyncIOMotorClient(MONGO_URI)
 db = client[DB_NAME]
+main_db = client[MAIN_BOT_DB_NAME] if MAIN_BOT_DB_NAME else None
 
 # Collections
 users_col = db.users
+main_tokens_col = main_db['tokens'] if main_db is not None else None
+plans_col = db.plans
 payments_col = db.payments  # Unclaimed payments from SMS
 settings_col = db.settings
 admins_col = db.admins  # Store admin IDs
