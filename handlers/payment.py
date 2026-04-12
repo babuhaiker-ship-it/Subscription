@@ -87,6 +87,13 @@ async def payment_submission_handler(client, message):
     if claimed_payment:
         # If this payment is part of a group (multiple IDs for same SMS), claim them all
         group_id = claimed_payment.get("group_id")
+
+        # Prepare plan info for recording
+        plan_info = {
+            "plan_id": plan_id,
+            "plan_name": plan["name"] if plan else "Default"
+        }
+
         if group_id:
             await payments_col.update_many(
                 {"group_id": group_id, "is_claimed": False},
@@ -94,7 +101,21 @@ async def payment_submission_handler(client, message):
                     "$set": {
                         "is_claimed": True,
                         "claimed_by": user_id,
-                        "claimed_at": datetime.now(pytz.utc)
+                        "claimed_at": datetime.now(pytz.utc),
+                        "plan_info": plan_info
+                    }
+                }
+            )
+        else:
+            # Update the single record we just found
+            await payments_col.update_one(
+                {"_id": claimed_payment["_id"]},
+                {
+                    "$set": {
+                        "is_claimed": True,
+                        "claimed_by": user_id,
+                        "claimed_at": datetime.now(pytz.utc),
+                        "plan_info": plan_info
                     }
                 }
             )

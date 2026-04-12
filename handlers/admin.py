@@ -1,5 +1,5 @@
 from pyrogram import Client, filters, types
-from database import is_admin, add_admin, get_db_stats, set_setting, get_setting, OWNER_ID, plans_col, users_col
+from database import is_admin, add_admin, get_db_stats, set_setting, get_setting, OWNER_ID, plans_col, users_col, payments_col
 from utils.localization import get_string
 from handlers.user import get_user_lang
 import uuid
@@ -244,32 +244,89 @@ async def premium_users_handler(client, message):
     if not await is_admin(user_id):
         return
 
-    premium_users = await users_col.find({"is_premium": True}).to_list(1000)
+    premium_users = await users_col.find({"is_premium": True}).to_list(100)
 
     if not premium_users:
         await message.reply_text("ℹ️ No premium users found.")
         return
 
-    text = "💎 **Premium Users List:**\n\n"
+    keyboard = []
     for user in premium_users:
-        uid = user.get("user_id")
-        # Try to get username if available in the database, otherwise show N/A
-        # We don't have username in users_col yet, but we can try to fetch it from the bot
-        try:
-            chat = await client.get_chat(uid)
-            username = f"@{chat.username}" if chat.username else f"[{chat.first_name}](tg://user?id={uid})"
-        except:
-            username = "Unknown User"
+        uid = user["user_id"]
+        keyboard.append([
+            types.InlineKeyboardButton(f"👤 {uid}", callback_data=f"admin_view_user_{uid}")
+        ])
 
-        line = f"• {username} (`{uid}`)\n"
+    await message.reply_text(
+        "💎 **Premium Users List:**\n\nClick a user ID to view their payment details and plan.",
+        reply_markup=types.InlineKeyboardMarkup(keyboard)
+    )
 
-        if len(text) + len(line) > 4000:
-            await message.reply_text(text)
-            text = "💎 **Premium Users List (Continued):**\n\n"
+@Client.on_callback_query(filters.regex("^admin_view_user_"))
+async def admin_view_user_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
 
-        text += line
+    target_uid = int(callback_query.data.split("_")[-1])
+    user = await users_col.find_one({"user_id": target_uid})
 
-    await message.reply_text(text)
+    if not user:
+        await callback_query.answer("User not found.", show_alert=True)
+        return
+
+    try:
+        chat = await client.get_chat(target_uid)
+        name = f"@{chat.username}" if chat.username else f"{chat.first_name} {chat.last_name or ''}"
+    except:
+        name = "Unknown"
+
+    expiry = user.get("premium_until")
+    expiry_str = expiry.strftime("%Y-%m-%d %H:%M UTC") if expiry else "N/A"
+
+    text = f"👤 **User Details:**\n"
+    text += f"🆔 **ID:** `{target_uid}`\n"
+    text += f"📛 **Name/Username:** {name}\n"
+    text += f"📅 **Premium Until:** {expiry_str}\n\n"
+    text += f"💳 **Payment History:**\n"
+
+    payments = await payments_col.find({"claimed_by": target_uid, "is_claimed": True}).sort("claimed_at", -1).to_list(10)
+
+    if not payments:
+        text += "_No payment records found._"
+    else:
+        for p in payments:
+            amount = p.get("amount", 0)
+            txn_id = p.get("txn_id", "N/A")
+            plan_name = p.get("plan_info", {}).get("plan_name", "Unknown Plan")
+            date = p.get("claimed_at").strftime("%Y-%m-%d") if p.get("claimed_at") else "N/A"
+
+            text += f"• ₹{amount} | {plan_name}\n  UTR: `{txn_id}` | {date}\n"
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("🔙 Back to List", callback_data="admin_back_premium")]
+    ])
+
+    await callback_query.edit_message_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_back_premium$"))
+async def admin_back_premium_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    premium_users = await users_col.find({"is_premium": True}).to_list(100)
+    keyboard = []
+    for user in premium_users:
+        uid = user["user_id"]
+        keyboard.append([
+            types.InlineKeyboardButton(f"👤 {uid}", callback_data=f"admin_view_user_{uid}")
+        ])
+
+    await callback_query.edit_message_text(
+        "💎 **Premium Users List:**\n\nClick a user ID to view their payment details and plan.",
+        reply_markup=types.InlineKeyboardMarkup(keyboard)
+    )
 
 @Client.on_message(filters.command("addpayment") & filters.private)
 async def add_payment_handler(client, message):
