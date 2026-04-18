@@ -5,9 +5,13 @@ import database
 from utils import send_and_schedule_deletion
 import asyncio
 
+import logging
+logger = logging.getLogger(__name__)
+
 def setup_command_handlers(app):
     @app.on_message(filters.command("start") & filters.private)
     async def start_cmd(client, message):
+        logger.info(f"Start command triggered by user {message.from_user.id}")
         await database.set_user_state(message.from_user.id, None)
         await message.reply(
             "👋 **Welcome!**\n\n"
