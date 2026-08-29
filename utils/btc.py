@@ -112,28 +112,41 @@ def derive_btc_address(xpub_key: str, index: int = 0, change: int = 0) -> str:
     else:
         return segwit_addr_encode('bc', 0, list(h160))
 
-def _fetch_btc_price_sync() -> float:
+def _fetch_btc_price_usd_sync() -> float:
     try:
-        res = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=inr", timeout=5)
+        res = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=5)
         if res.status_code == 200:
             data = res.json()
-            if "bitcoin" in data and "inr" in data["bitcoin"]:
-                return float(data["bitcoin"]["inr"])
+            if "bitcoin" in data and "usd" in data["bitcoin"]:
+                return float(data["bitcoin"]["usd"])
     except Exception as e:
         logger.warning(f"CoinGecko API error: {e}")
 
     try:
         res = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=5)
         if res.status_code == 200:
-            usdt_price = float(res.json()["price"])
-            return usdt_price * 88.0
+            return float(res.json()["price"])
     except Exception as e:
         logger.warning(f"Binance API error: {e}")
 
-    return 8000000.0
+    return 95000.0
+
+async def get_btc_price_in_usd() -> float:
+    return await asyncio.to_thread(_fetch_btc_price_usd_sync)
+
+async def usd_to_btc(amount_usd: float) -> float:
+    btc_rate = await get_btc_price_in_usd()
+    if btc_rate <= 0:
+        btc_rate = 95000.0
+    btc_val = amount_usd / btc_rate
+    return round(btc_val, 8)
+
+def _fetch_btc_price_sync() -> float:
+    return _fetch_btc_price_usd_sync() * 88.0
 
 async def get_btc_price_in_inr() -> float:
-    return await asyncio.to_thread(_fetch_btc_price_sync)
+    usd = await get_btc_price_in_usd()
+    return usd * 88.0
 
 async def inr_to_btc(amount_inr: float) -> float:
     btc_rate = await get_btc_price_in_inr()

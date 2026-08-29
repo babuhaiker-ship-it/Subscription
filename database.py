@@ -19,6 +19,7 @@ async def init_settings():
     """Initializes default settings in the database if not present."""
     default_settings = {
         "price": DEFAULT_PRICE,
+        "price_usd": 3.99,
         "upi_id": DEFAULT_UPI_ID,
         "qr_url": DEFAULT_QR_URL,
         "btc_xpub": "",

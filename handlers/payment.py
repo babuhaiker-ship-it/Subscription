@@ -1,7 +1,7 @@
 from pyrogram import Client, filters, types
 from database import users_col, payments_col, btc_payments_col, get_setting, set_setting, main_tokens_col, plans_col
 from utils.localization import get_string
-from utils.btc import derive_btc_address, inr_to_btc, check_btc_address_transactions
+from utils.btc import derive_btc_address, inr_to_btc, usd_to_btc, check_btc_address_transactions
 from datetime import datetime, timedelta
 import pytz
 import asyncio
@@ -17,15 +17,17 @@ async def btc_payment_init_handler(client, callback_query):
     plan_id = callback_query.data.split("_")[-1]
 
     if plan_id == "default":
-        price = await get_setting("price", 199)
+        price_inr = await get_setting("price", 199)
+        price_usd = await get_setting("price_usd", 3.99)
         days = 30
-        plan = {"name": "Default Premium", "price": price, "days": days, "plan_id": "default"}
+        plan = {"name": "Monthly Plan", "price": price_inr, "price_usd": price_usd, "days": days, "plan_id": "default"}
     else:
         plan = await plans_col.find_one({"plan_id": plan_id})
         if not plan:
             await callback_query.answer("Plan not found.", show_alert=True)
             return
-        price = plan["price"]
+        price_inr = plan["price"]
+        price_usd = plan.get("price_usd", round(price_inr / 88.0, 2))
         days = plan["days"]
 
     xpub = await get_setting("btc_xpub", "")
@@ -62,7 +64,7 @@ async def btc_payment_init_handler(client, callback_query):
             await callback_query.answer("❌ Error generating BTC address. Please contact support.", show_alert=True)
             return
 
-        btc_amount = await inr_to_btc(price)
+        btc_amount = await usd_to_btc(price_usd)
         expiry_dt = now_utc + timedelta(minutes=expiry_minutes)
 
         inv_doc = {
@@ -71,7 +73,8 @@ async def btc_payment_init_handler(client, callback_query):
             "address": btc_address,
             "address_index": curr_index,
             "btc_amount": btc_amount,
-            "price_inr": price,
+            "price_inr": price_inr,
+            "price_usd": price_usd,
             "created_at": now_utc,
             "expires_at": expiry_dt,
             "is_claimed": False

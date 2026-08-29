@@ -45,11 +45,20 @@ async def setprice_handler(client, message):
         return
 
     if len(message.command) < 2:
-        await message.reply_text("Usage: /setprice <amount>")
+        await message.reply_text("Usage: `/setprice <amount_inr>` or `/setprice usd <amount_usd>`")
+        return
+
+    if len(message.command) >= 3 and message.command[1].lower() == "usd":
+        try:
+            new_usd = float(message.command[2])
+            await set_setting("price_usd", new_usd)
+            await message.reply_text(f"✅ Default USD Price updated to `${new_usd:.2f}`")
+        except ValueError:
+            await message.reply_text("❌ Please enter a valid number for USD price.")
         return
 
     try:
-        new_price = int(message.command[1])
+        new_price = float(message.command[1])
         await set_setting("price", new_price)
         await message.reply_text(f"✅ Price updated to ₹{new_price}")
     except ValueError:
@@ -226,6 +235,7 @@ async def debug_handler(client, message):
         return
 
     price = await get_setting("price")
+    price_usd = await get_setting("price_usd", 3.99)
     upi = await get_setting("upi_id")
     img_db = await get_setting("img_db_channel")
     sms_group = await get_setting("sms_group_id")
@@ -234,7 +244,8 @@ async def debug_handler(client, message):
     btc_expiry = await get_setting("btc_expiry_minutes", 60)
 
     debug_text = "🔎 **Bot Debug Info:**\n\n"
-    debug_text += f"💰 **Price:** ₹{price}\n"
+    debug_text += f"💰 **Default Price (INR):** ₹{price}\n"
+    debug_text += f"💵 **Default Price (USD):** ${price_usd:.2f}\n"
     debug_text += f"💳 **UPI:** `{upi}`\n"
     debug_text += f"🖼 **Image DB:** `{img_db}`\n"
     debug_text += f"📨 **SMS Group:** `{sms_group}`\n"
@@ -504,12 +515,14 @@ async def show_plan_creation_menu(message, user_id):
 
     name_text = f"✅ Name: {temp.get('name')}" if temp.get('name') else "❌ Name"
     days_text = f"✅ Days: {temp.get('days')}" if temp.get('days') else "❌ Days"
-    price_text = f"✅ Price: {temp.get('price')}" if temp.get('price') else "❌ Price"
+    price_text = f"✅ Price (INR): ₹{temp.get('price')}" if temp.get('price') else "❌ Price (INR)"
+    price_usd_text = f"✅ Price (USD): ${temp.get('price_usd')}" if temp.get('price_usd') else "💵 Set Price (USD - Optional)"
 
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(name_text, callback_data="admin_set_plan_name")],
         [types.InlineKeyboardButton(days_text, callback_data="admin_set_plan_days")],
         [types.InlineKeyboardButton(price_text, callback_data="admin_set_plan_price")],
+        [types.InlineKeyboardButton(price_usd_text, callback_data="admin_set_plan_priceusd")],
         [types.InlineKeyboardButton("✔️ Confirm", callback_data="admin_confirm_plan")],
         [types.InlineKeyboardButton("🔙 Back", callback_data="admin_managesub_back")]
     ])
@@ -547,7 +560,8 @@ async def admin_confirm_plan_callback(client, callback_query):
         "plan_id": plan_id,
         "name": temp["name"],
         "days": temp["days"],
-        "price": float(temp["price"])
+        "price": float(temp["price"]),
+        "price_usd": float(temp.get("price_usd")) if temp.get("price_usd") else float(temp["price"]) / 88.0
     }
 
     await plans_col.update_one({"plan_id": plan_id}, {"$set": plan_doc}, upsert=True)
@@ -620,7 +634,8 @@ async def admin_edit_plan_callback(client, callback_query):
         "plan_id": plan["plan_id"],
         "name": plan["name"],
         "days": plan["days"],
-        "price": plan["price"]
+        "price": plan["price"],
+        "price_usd": plan.get("price_usd", round(plan["price"] / 88.0, 2))
     }
 
     await users_col.update_one({"user_id": user_id}, {"$set": {"temp_plan": temp_plan, "state": None}})
@@ -805,6 +820,12 @@ async def admin_input_handler(client, message):
                 temp["price"] = float(text)
             except ValueError:
                 await message.reply_text("❌ Please enter a valid number for price.")
+                return
+        elif field == "priceusd":
+            try:
+                temp["price_usd"] = float(text)
+            except ValueError:
+                await message.reply_text("❌ Please enter a valid number for USD price.")
                 return
 
         await users_col.update_one(

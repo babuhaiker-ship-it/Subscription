@@ -90,11 +90,12 @@ async def get_premium_handler(client, callback_query):
     else:
         # Fallback to default price
         price = await get_setting("price", 199)
+        price_usd = await get_setting("price_usd", 3.99)
         keyboard = types.InlineKeyboardMarkup([
-            [types.InlineKeyboardButton(get_string("btn_pay_upi", lang=lang), callback_data="pay_upi_default")],
-            [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang), callback_data="pay_btc_default")]
+            [types.InlineKeyboardButton(get_string("btn_pay_upi", lang=lang, price=price, price_usd=price_usd), callback_data="pay_upi_default")],
+            [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price=price, price_usd=price_usd), callback_data="pay_btc_default")]
         ])
-        text = get_string("select_method", lang=lang, plan_name="Default Premium", price=price)
+        text = get_string("select_method", lang=lang, plan_name="Monthly Plan", price=price, price_usd=price_usd)
         await callback_query.edit_message_text(text, reply_markup=keyboard)
 
 @Client.on_callback_query(filters.regex("^select_plan_"))
@@ -111,12 +112,14 @@ async def select_plan_handler(client, callback_query):
     # Store selected plan in user doc
     await users_col.update_one({"user_id": user_id}, {"$set": {"selected_plan_id": plan_id}})
 
+    price_usd = plan.get("price_usd", round(plan["price"] / 88.0, 2))
+
     keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton(get_string("btn_pay_upi", lang=lang), callback_data=f"pay_upi_{plan_id}")],
-        [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang), callback_data=f"pay_btc_{plan_id}")]
+        [types.InlineKeyboardButton(get_string("btn_pay_upi", lang=lang, price=plan['price'], price_usd=price_usd), callback_data=f"pay_upi_{plan_id}")],
+        [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price=plan['price'], price_usd=price_usd), callback_data=f"pay_btc_{plan_id}")]
     ])
 
-    text = get_string("select_method", lang=lang, plan_name=plan['name'], price=plan['price'])
+    text = get_string("select_method", lang=lang, plan_name=plan['name'], price=plan['price'], price_usd=price_usd)
     await callback_query.edit_message_text(text, reply_markup=keyboard)
 
 @Client.on_callback_query(filters.regex("^pay_upi_"))
