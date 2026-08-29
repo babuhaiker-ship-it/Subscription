@@ -11,6 +11,7 @@ users_col = db.users
 main_tokens_col = main_db['tokens'] if main_db is not None else None
 plans_col = db.plans
 payments_col = db.payments  # Unclaimed payments from SMS
+btc_payments_col = db.btc_payments # Bitcoin invoices & payments
 settings_col = db.settings
 admins_col = db.admins  # Store admin IDs
 
@@ -20,6 +21,9 @@ async def init_settings():
         "price": DEFAULT_PRICE,
         "upi_id": DEFAULT_UPI_ID,
         "qr_url": DEFAULT_QR_URL,
+        "btc_xpub": "",
+        "btc_address_index": 0,
+        "btc_expiry_minutes": 60,
         "welcome_msg_en": "Welcome to **SpicyNyraa's Premium Bot**! 💎\n\nGet exclusive access to premium content, special features, and more by joining our premium plan.",
         "welcome_msg_hi": "**SpicyNyraa के प्रीमियम बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
         "success_msg_en": "🎉 **Payment Verified!**\n\nYou now have 30 days of premium access. Go to @SpicyNyraa_bot and send /start to begin!",

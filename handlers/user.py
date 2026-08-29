@@ -107,7 +107,24 @@ async def select_plan_handler(client, callback_query):
     # Store selected plan in user doc
     await users_col.update_one({"user_id": user_id}, {"$set": {"selected_plan_id": plan_id}})
 
-    await show_payment_instructions(client, user_id, lang, plan["price"], plan)
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton(get_string("btn_pay_upi", lang=lang), callback_data=f"pay_upi_{plan_id}")],
+        [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang), callback_data=f"pay_btc_{plan_id}")]
+    ])
+
+    text = get_string("select_method", lang=lang, plan_name=plan['name'], price=plan['price'])
+    await callback_query.edit_message_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^pay_upi_"))
+async def pay_upi_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    lang = await get_user_lang(user_id)
+    plan_id = callback_query.data.split("_")[-1]
+
+    plan = await plans_col.find_one({"plan_id": plan_id})
+    price = plan["price"] if plan else await get_setting("price", 199)
+
+    await show_payment_instructions(client, user_id, lang, price, plan)
     await callback_query.message.delete()
 
 async def show_payment_instructions(client, user_id, lang, price, plan=None):

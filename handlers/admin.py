@@ -16,6 +16,7 @@ async def admin_help_handler(client, message):
         help_text += "\n/addadmin <user_id> - Add a new admin (Owner only)"
     help_text += "\n/setdatabase - Set image database (reply to forwarded message)"
     help_text += "\n/setupidatabase - Set payment notification group (reply to forwarded message)"
+    help_text += "\n/btcsettings - Manage Bitcoin / XPUB configuration"
     help_text += "\n/debug - View current bot configuration"
     help_text += "\n/managesub - Manage subscription plans"
     help_text += "\n/premiumusers - List all premium users"
@@ -228,12 +229,18 @@ async def debug_handler(client, message):
     upi = await get_setting("upi_id")
     img_db = await get_setting("img_db_channel")
     sms_group = await get_setting("sms_group_id")
+    btc_xpub = await get_setting("btc_xpub", "")
+    btc_idx = await get_setting("btc_address_index", 0)
+    btc_expiry = await get_setting("btc_expiry_minutes", 60)
 
     debug_text = "🔎 **Bot Debug Info:**\n\n"
     debug_text += f"💰 **Price:** ₹{price}\n"
     debug_text += f"💳 **UPI:** `{upi}`\n"
     debug_text += f"🖼 **Image DB:** `{img_db}`\n"
     debug_text += f"📨 **SMS Group:** `{sms_group}`\n"
+    debug_text += f"₿ **Bitcoin XPUB:** `{btc_xpub[:15]}...` ({'Configured' if btc_xpub else 'Not Set'})\n"
+    debug_text += f"🔢 **BTC Address Index:** `{btc_idx}`\n"
+    debug_text += f"⏱ **BTC Expiry:** `{btc_expiry}` minutes\n"
     debug_text += f"👑 **Owner ID:** `{OWNER_ID}`\n"
 
     await message.reply_text(debug_text)
@@ -631,42 +638,180 @@ async def admin_delete_plan_callback(client, callback_query):
     await callback_query.answer("✅ Plan deleted!", show_alert=True)
     await admin_list_plans_callback(client, callback_query)
 
+# Bitcoin Admin Panel Controls
+
+@Client.on_message(filters.command("btcsettings") & filters.private)
+async def btc_settings_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+    await show_btc_settings_menu(client, message, user_id, is_edit=False)
+
+async def show_btc_settings_menu(client, message_or_query, user_id, is_edit=True):
+    btc_xpub = await get_setting("btc_xpub", "")
+    btc_idx = await get_setting("btc_address_index", 0)
+    btc_expiry = await get_setting("btc_expiry_minutes", 60)
+
+    from database import btc_payments_col
+    total_btc_payments = await btc_payments_col.count_documents({"is_claimed": True})
+
+    text = "₿ **Bitcoin / XPUB Integration Settings**\n\n"
+    text += f"🔑 **Extended Public Key (XPUB/ZPUB/YPUB):**\n`{btc_xpub if btc_xpub else 'Not Configured'}`\n\n"
+    text += f"🔢 **Current Address Index:** `{btc_idx}`\n"
+    text += f"⏱ **Invoice Expiry Duration:** `{btc_expiry}` Minutes\n"
+    text += f"✅ **Total Verified BTC Payments:** `{total_btc_payments}`\n"
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("🔑 Set / Change XPUB", callback_data="admin_set_btc_xpub")],
+        [types.InlineKeyboardButton("⏱ Set Expiry Minutes", callback_data="admin_set_btc_expiry")],
+        [types.InlineKeyboardButton("📜 View BTC Payments", callback_data="admin_list_btc_payments")],
+        [types.InlineKeyboardButton("🔄 Test Address Derivation", callback_data="admin_test_btc_derive")]
+    ])
+
+    if is_edit:
+        await message_or_query.edit_message_text(text, reply_markup=keyboard)
+    else:
+        await message_or_query.reply_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_set_btc_"))
+async def btc_admin_callback_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    data = callback_query.data
+    if data == "admin_set_btc_xpub":
+        await users_col.update_one({"user_id": user_id}, {"$set": {"state": "admin_setting_btc_xpub"}})
+        await callback_query.message.reply_text(
+            "🔑 **Send Extended Public Key**\n\n"
+            "Please send your Bitcoin `xpub`, `zpub`, or `ypub` key.\n"
+            "Example: `zpub6rFR7y4Q2AijBEqTUquhVz...`"
+        )
+        await callback_query.answer()
+    elif data == "admin_set_btc_expiry":
+        await users_col.update_one({"user_id": user_id}, {"$set": {"state": "admin_setting_btc_expiry"}})
+        await callback_query.message.reply_text(
+            "⏱ **Send Invoice Expiry Duration**\n\n"
+            "Please enter the duration in minutes for Bitcoin payment invoice expiry (e.g. `60` for 1 hour)."
+        )
+        await callback_query.answer()
+    elif data == "admin_test_btc_derive":
+        xpub = await get_setting("btc_xpub", "")
+        if not xpub:
+            await callback_query.answer("❌ No XPUB set yet!", show_alert=True)
+            return
+        idx = await get_setting("btc_address_index", 0)
+        from utils.btc import derive_btc_address
+        try:
+            addr = derive_btc_address(xpub, idx)
+            await callback_query.message.reply_text(
+                f"✅ **Derivation Successful!**\n\nIndex `{idx}` derived address:\n`{addr}`"
+            )
+            await callback_query.answer()
+        except Exception as e:
+            await callback_query.message.reply_text(f"❌ Derivation error: {e}")
+            await callback_query.answer()
+
+@Client.on_callback_query(filters.regex("^admin_list_btc_payments$"))
+async def admin_list_btc_payments_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    from database import btc_payments_col
+    btc_payments = await btc_payments_col.find({"is_claimed": True}).sort("claimed_at", -1).to_list(50)
+
+    if not btc_payments:
+        await callback_query.answer("No completed Bitcoin payments found.", show_alert=True)
+        return
+
+    text = "₿ **Bitcoin Payments History:**\n\n"
+    for p in btc_payments:
+        uid = p.get("user_id")
+        btc_val = p.get("btc_amount")
+        addr = p.get("address")
+        txid = p.get("txid", "N/A")
+        date = p.get("claimed_at").strftime("%Y-%m-%d %H:%M UTC") if p.get("claimed_at") else "N/A"
+        text += f"• User `{uid}` | `{btc_val:.8f} BTC`\n  Addr: `{addr}`\n  TX: `{txid}` | {date}\n\n"
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("🔙 Back to BTC Settings", callback_data="admin_back_btc_settings")]
+    ])
+
+    await callback_query.edit_message_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_back_btc_settings$"))
+async def admin_back_btc_settings_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+    await show_btc_settings_menu(client, callback_query.message, user_id, is_edit=True)
+
 # Input handler for admin settings
 @Client.on_message(filters.private & filters.text, group=1)
 async def admin_input_handler(client, message):
     user_id = message.from_user.id
     user = await users_col.find_one({"user_id": user_id})
 
-    if not user or not user.get("state") or not user.get("state").startswith("admin_setting_plan_"):
+    if not user or not user.get("state"):
         return
 
     if not await is_admin(user_id):
         return
 
     state = user["state"]
-    field = state.split("_")[-1]
-    text = message.text.strip()
-    temp = user.get("temp_plan", {})
 
-    if field == "name":
-        temp["name"] = text
-    elif field == "days":
-        if not text.isdigit():
-            await message.reply_text("❌ Please enter a valid number for days.")
-            return
-        temp["days"] = int(text)
-    elif field == "price":
+    if state == "admin_setting_btc_xpub":
+        xpub_text = message.text.strip()
+        from utils.btc import derive_btc_address
         try:
-            temp["price"] = float(text)
+            # Validate derivation
+            test_addr = derive_btc_address(xpub_text, 0)
+            await set_setting("btc_xpub", xpub_text)
+            await users_col.update_one({"user_id": user_id}, {"$unset": {"state": ""}})
+            await message.reply_text(
+                f"✅ **XPUB Saved Successfully!**\n\nSample derived address at index 0:\n`{test_addr}`"
+            )
+        except Exception as e:
+            await message.reply_text(f"❌ **Invalid XPUB Key!** Error: {e}\nPlease check your xpub/zpub key and try again.")
+        return
+
+    elif state == "admin_setting_btc_expiry":
+        try:
+            exp_mins = int(message.text.strip())
+            if exp_mins <= 0:
+                raise ValueError()
+            await set_setting("btc_expiry_minutes", exp_mins)
+            await users_col.update_one({"user_id": user_id}, {"$unset": {"state": ""}})
+            await message.reply_text(f"✅ **Bitcoin invoice expiry set to {exp_mins} minutes.**")
         except ValueError:
-            await message.reply_text("❌ Please enter a valid number for price.")
-            return
+            await message.reply_text("❌ Please enter a valid positive number of minutes.")
+        return
 
-    await users_col.update_one(
-        {"user_id": user_id},
-        {"$set": {"temp_plan": temp, "state": None}}
-    )
+    elif state.startswith("admin_setting_plan_"):
+        field = state.split("_")[-1]
+        text = message.text.strip()
+        temp = user.get("temp_plan", {})
 
-    # To keep it interactive, we can send the menu again
-    keyboard = types.InlineKeyboardMarkup([[types.InlineKeyboardButton("🔙 Back to Plan Editor", callback_data="admin_add_plan")]])
-    await message.reply_text(f"✅ Set {field} to: `{text}`", reply_markup=keyboard)
+        if field == "name":
+            temp["name"] = text
+        elif field == "days":
+            if not text.isdigit():
+                await message.reply_text("❌ Please enter a valid number for days.")
+                return
+            temp["days"] = int(text)
+        elif field == "price":
+            try:
+                temp["price"] = float(text)
+            except ValueError:
+                await message.reply_text("❌ Please enter a valid number for price.")
+                return
+
+        await users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"temp_plan": temp, "state": None}}
+        )
+
+        # To keep it interactive, we can send the menu again
+        keyboard = types.InlineKeyboardMarkup([[types.InlineKeyboardButton("🔙 Back to Plan Editor", callback_data="admin_add_plan")]])
+        await message.reply_text(f"✅ Set {field} to: `{text}`", reply_markup=keyboard)

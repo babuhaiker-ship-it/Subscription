@@ -5,3 +5,5 @@ pytz
 shortzy
 python-dotenv
 tgcrypto
+bip-utils
+requests
