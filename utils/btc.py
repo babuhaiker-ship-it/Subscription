@@ -1,28 +1,116 @@
 import requests
 import logging
 import asyncio
-from bip_utils import Bip84, Bip84Coins, Bip44, Bip44Coins, Bip49, Bip49Coins, Bip44Changes
+import hmac
+import hashlib
+import struct
+import base58
+import ecdsa
 
 logger = logging.getLogger(__name__)
 
-def derive_btc_address(xpub_key: str, index: int = 0) -> str:
-    """
-    Derives a Bitcoin address from extended public key (xpub/zpub/ypub) at specified index.
-    """
-    key_str = xpub_key.strip()
-    if key_str.startswith("zpub"):
-        obj = Bip84.FromExtendedKey(key_str, Bip84Coins.BITCOIN)
-    elif key_str.startswith("ypub"):
-        obj = Bip49.FromExtendedKey(key_str, Bip49Coins.BITCOIN)
-    elif key_str.startswith("xpub"):
-        try:
-            obj = Bip84.FromExtendedKey(key_str, Bip84Coins.BITCOIN)
-        except Exception:
-            obj = Bip44.FromExtendedKey(key_str, Bip44Coins.BITCOIN)
-    else:
-        raise ValueError("Unsupported extended key format. Key must start with xpub, zpub, or ypub.")
+CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
 
-    return obj.Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
+def sha256(data: bytes) -> bytes:
+    return hashlib.sha256(data).digest()
+
+def ripemd160(data: bytes) -> bytes:
+    h = hashlib.new('ripemd160')
+    h.update(sha256(data))
+    return h.digest()
+
+def b58check_encode(version: bytes, payload: bytes) -> str:
+    data = version + payload
+    checksum = sha256(sha256(data))[:4]
+    return base58.b58encode(data + checksum).decode('ascii')
+
+def bech32_polymod(values):
+    GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+    chk = 1
+    for v in values:
+        b = chk >> 25
+        chk = ((chk & 0x1ffffff) << 5) ^ v
+        for i in range(5):
+            chk ^= GEN[i] if ((b >> i) & 1) else 0
+    return chk
+
+def bech32_hrp_expand(hrp):
+    return [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
+
+def bech32_create_checksum(hrp, data):
+    values = bech32_hrp_expand(hrp) + data
+    polymod = bech32_polymod(values + [0, 0, 0, 0, 0, 0]) ^ 1
+    return [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
+
+def convertbits(data, frombits, tobits, pad=True):
+    acc = 0
+    bits = 0
+    ret = []
+    maxv = (1 << tobits) - 1
+    for value in data:
+        if value < 0 or (value >> frombits):
+            return None
+        acc = (acc << frombits) | value
+        bits += frombits
+        while bits >= tobits:
+            bits -= tobits
+            ret.append((acc >> bits) & maxv)
+    if pad:
+        if bits:
+            ret.append((acc << (tobits - bits)) & maxv)
+    elif bits >= frombits or ((acc << (tobits - bits)) & maxv):
+        return None
+    return ret
+
+def segwit_addr_encode(hrp, witver, witprog):
+    data = [witver] + convertbits(witprog, 8, 5)
+    checksum = bech32_create_checksum(hrp, data)
+    return hrp + '1' + ''.join([CHARSET[d] for d in data + checksum])
+
+def derive_bip32_child_pubkey(parent_pubkey_bytes: bytes, parent_chain_code: bytes, index: int) -> tuple[bytes, bytes]:
+    data = parent_pubkey_bytes + struct.pack('>I', index)
+    I = hmac.new(parent_chain_code, data, hashlib.sha512).digest()
+    IL, IR = I[:32], I[32:]
+
+    il_int = int.from_bytes(IL, 'big')
+    curve = ecdsa.SECP256k1
+    if il_int >= curve.order:
+        raise ValueError('Scalar out of bounds')
+
+    p_point = ecdsa.VerifyingKey.from_string(parent_pubkey_bytes, curve=curve).pubkey.point
+    c_point = il_int * curve.generator + p_point
+
+    x = c_point.x()
+    y = c_point.y()
+    prefix = b'\x02' if y % 2 == 0 else b'\x03'
+    child_pubkey_bytes = prefix + x.to_bytes(32, 'big')
+    return child_pubkey_bytes, IR
+
+def derive_btc_address(xpub_key: str, index: int = 0, change: int = 0) -> str:
+    """
+    Derives a Bitcoin address from extended public key (xpub/zpub/ypub) using zero C-extension dependencies.
+    """
+    ext_key = xpub_key.strip()
+    raw = base58.b58decode_check(ext_key)
+    version = raw[:4]
+    chain_code = raw[13:45]
+    pubkey = raw[45:78]
+
+    change_pub, change_chain = derive_bip32_child_pubkey(pubkey, chain_code, change)
+    idx_pub, _ = derive_bip32_child_pubkey(change_pub, change_chain, index)
+
+    h160 = ripemd160(idx_pub)
+
+    if version in (b'\x04\xb2\x47\x46', b'\x04\xb2\x43\x0c'): # zpub (Native SegWit bc1q...)
+        return segwit_addr_encode('bc', 0, list(h160))
+    elif version == b'\x04\x9d\x7d\x41': # ypub (Nested SegWit 3...)
+        redeem_script = b'\x00\x14' + h160
+        script_hash = ripemd160(redeem_script)
+        return b58check_encode(b'\x05', script_hash)
+    elif version == b'\x04\x88\xb2\x1e': # xpub (Legacy 1...)
+        return b58check_encode(b'\x00', h160)
+    else:
+        return segwit_addr_encode('bc', 0, list(h160))
 
 def _fetch_btc_price_sync() -> float:
     try:
