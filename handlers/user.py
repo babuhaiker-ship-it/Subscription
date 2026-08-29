@@ -90,8 +90,12 @@ async def get_premium_handler(client, callback_query):
     else:
         # Fallback to default price
         price = await get_setting("price", 199)
-        await show_payment_instructions(client, user_id, lang, price)
-        await callback_query.message.delete()
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton(get_string("btn_pay_upi", lang=lang), callback_data="pay_upi_default")],
+            [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang), callback_data="pay_btc_default")]
+        ])
+        text = get_string("select_method", lang=lang, plan_name="Default Premium", price=price)
+        await callback_query.edit_message_text(text, reply_markup=keyboard)
 
 @Client.on_callback_query(filters.regex("^select_plan_"))
 async def select_plan_handler(client, callback_query):

@@ -16,18 +16,22 @@ async def btc_payment_init_handler(client, callback_query):
     lang = await get_user_lang(user_id)
     plan_id = callback_query.data.split("_")[-1]
 
-    plan = await plans_col.find_one({"plan_id": plan_id})
-    if not plan:
-        await callback_query.answer("Plan not found.", show_alert=True)
-        return
+    if plan_id == "default":
+        price = await get_setting("price", 199)
+        days = 30
+        plan = {"name": "Default Premium", "price": price, "days": days, "plan_id": "default"}
+    else:
+        plan = await plans_col.find_one({"plan_id": plan_id})
+        if not plan:
+            await callback_query.answer("Plan not found.", show_alert=True)
+            return
+        price = plan["price"]
+        days = plan["days"]
 
     xpub = await get_setting("btc_xpub", "")
     if not xpub:
         await callback_query.answer("❌ Bitcoin payment method is currently disabled or XPUB is not configured by admin.", show_alert=True)
         return
-
-    price = plan["price"]
-    days = plan["days"]
     expiry_minutes = await get_setting("btc_expiry_minutes", 60)
 
     # Check for existing active unexpired invoice for this user and plan
