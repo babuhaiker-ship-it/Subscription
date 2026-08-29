@@ -15,7 +15,6 @@ async def admin_help_handler(client, message):
     if user_id == OWNER_ID:
         help_text += "\n/addadmin <user_id> - Add a new admin (Owner only)"
     help_text += "\n/setdatabase - Set image database (reply to forwarded message)"
-    help_text += "\n/setupidatabase - Set payment notification group (reply to forwarded message)"
     help_text += "\n/btcsettings - Manage Bitcoin / XPUB configuration"
     help_text += "\n/debug - View current bot configuration"
     help_text += "\n/managesub - Manage subscription plans"
@@ -64,19 +63,6 @@ async def setprice_handler(client, message):
     except ValueError:
         await message.reply_text("❌ Please enter a valid number for price.")
 
-@Client.on_message(filters.command("setupi") & filters.private)
-async def setupi_handler(client, message):
-    user_id = message.from_user.id
-    if not await is_admin(user_id):
-        return
-
-    if len(message.command) < 2:
-        await message.reply_text("Usage: /setupi <upi_id>")
-        return
-
-    new_upi = message.command[1]
-    await set_setting("upi_id", new_upi)
-    await message.reply_text(f"✅ UPI ID updated to `{new_upi}`")
 
 
 @Client.on_message(filters.private & filters.forwarded)
@@ -193,40 +179,6 @@ async def setdatabase_handler(client, message):
     except Exception as e:
         await message.reply_text(f"❌ An error occurred: {e}")
 
-@Client.on_message(filters.command("setupidatabase") & filters.private)
-async def setupidatabase_handler(client, message):
-    user_id = message.from_user.id
-    if not await is_admin(user_id):
-        return
-
-    # Handle forward_from_chat (standard) or forward_origin (privacy enabled)
-    forwarded = message.reply_to_message
-    if not forwarded or not (forwarded.forward_from_chat or forwarded.forward_origin):
-        await message.reply_text("❌ **Invalid Usage!**\n\nPlease **forward a message** from your payment notification group to this chat, then **reply** to that message with `/setupidatabase`.")
-        return
-
-    if forwarded.forward_from_chat:
-        channel_id = forwarded.forward_from_chat.id
-    else:
-        origin = forwarded.forward_origin
-        if hasattr(origin, "chat"):
-            channel_id = origin.chat.id
-        else:
-            await message.reply_text("❌ **Privacy Error!**\n\nI couldn't detect the source chat ID. Please ensure the message is from a **Group or Channel**.")
-            return
-
-    try:
-        chat = await client.get_chat(channel_id)
-        chat_type = str(chat.type).split(".")[-1].lower()
-
-        if chat_type not in ["group", "supergroup", "channel"]:
-            await message.reply_text(f"❌ This belongs to a {chat_type}. Please use a group or channel.")
-            return
-
-        await set_setting("sms_group_id", channel_id)
-        await message.reply_text(f"✅ **Success!**\n\nPayment notification group set to `{chat.title}` (`{channel_id}`).\n\nI will now listen for payments in this group.")
-    except Exception as e:
-        await message.reply_text(f"❌ Could not access group: {e}")
 
 @Client.on_message(filters.command("debug") & filters.private)
 async def debug_handler(client, message):
@@ -236,7 +188,6 @@ async def debug_handler(client, message):
 
     price = await get_setting("price")
     price_usd = await get_setting("price_usd", 3.99)
-    upi = await get_setting("upi_id")
     img_db = await get_setting("img_db_channel")
     sms_group = await get_setting("sms_group_id")
     btc_xpub = await get_setting("btc_xpub", "")
@@ -244,11 +195,8 @@ async def debug_handler(client, message):
     btc_expiry = await get_setting("btc_expiry_minutes", 60)
 
     debug_text = "🔎 **Bot Debug Info:**\n\n"
-    debug_text += f"💰 **Default Price (INR):** ₹{price}\n"
     debug_text += f"💵 **Default Price (USD):** ${price_usd:.2f}\n"
-    debug_text += f"💳 **UPI:** `{upi}`\n"
     debug_text += f"🖼 **Image DB:** `{img_db}`\n"
-    debug_text += f"📨 **SMS Group:** `{sms_group}`\n"
     debug_text += f"₿ **Bitcoin XPUB:** `{btc_xpub[:15]}...` ({'Configured' if btc_xpub else 'Not Set'})\n"
     debug_text += f"🔢 **BTC Address Index:** `{btc_idx}`\n"
     debug_text += f"⏱ **BTC Expiry:** `{btc_expiry}` minutes\n"

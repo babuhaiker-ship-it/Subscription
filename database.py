@@ -1,6 +1,6 @@
 import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
-from config import MONGO_URI, DB_NAME, MAIN_BOT_DB_NAME, DEFAULT_PRICE, DEFAULT_UPI_ID, DEFAULT_QR_URL, OWNER_ID
+from config import MONGO_URI, DB_NAME, MAIN_BOT_DB_NAME, DEFAULT_PRICE, DEFAULT_QR_URL, OWNER_ID
 
 client = AsyncIOMotorClient(MONGO_URI)
 db = client[DB_NAME]
@@ -20,7 +20,6 @@ async def init_settings():
     default_settings = {
         "price": DEFAULT_PRICE,
         "price_usd": 3.99,
-        "upi_id": DEFAULT_UPI_ID,
         "qr_url": DEFAULT_QR_URL,
         "btc_xpub": "",
         "btc_address_index": 0,

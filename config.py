@@ -15,6 +15,5 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # Default Settings (can be overridden by DB)
 DEFAULT_PRICE = 3.99
-DEFAULT_UPI_ID = ""
 DEFAULT_QR_URL = ""
 MAIN_BOT_USERNAME = "@PremiumContent_bot"

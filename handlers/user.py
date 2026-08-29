@@ -89,13 +89,11 @@ async def get_premium_handler(client, callback_query):
         )
     else:
         # Fallback to default price
-        price = await get_setting("price", 199)
         price_usd = await get_setting("price_usd", 3.99)
         keyboard = types.InlineKeyboardMarkup([
-            [types.InlineKeyboardButton(get_string("btn_pay_upi", lang=lang, price=price, price_usd=price_usd), callback_data="pay_upi_default")],
-            [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price=price, price_usd=price_usd), callback_data="pay_btc_default")]
+            [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price_usd=price_usd), callback_data="pay_btc_default")]
         ])
-        text = get_string("select_method", lang=lang, plan_name="Monthly Plan", price=price, price_usd=price_usd)
+        text = get_string("select_method", lang=lang, plan_name="Monthly Plan", price_usd=price_usd)
         await callback_query.edit_message_text(text, reply_markup=keyboard)
 
 @Client.on_callback_query(filters.regex("^select_plan_"))
@@ -112,75 +110,14 @@ async def select_plan_handler(client, callback_query):
     # Store selected plan in user doc
     await users_col.update_one({"user_id": user_id}, {"$set": {"selected_plan_id": plan_id}})
 
-    price_usd = plan.get("price_usd", round(plan["price"] / 88.0, 2))
+    price_usd = plan.get("price_usd", round(plan.get("price", 3.99) / 88.0, 2))
 
     keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton(get_string("btn_pay_upi", lang=lang, price=plan['price'], price_usd=price_usd), callback_data=f"pay_upi_{plan_id}")],
-        [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price=plan['price'], price_usd=price_usd), callback_data=f"pay_btc_{plan_id}")]
+        [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price_usd=price_usd), callback_data=f"pay_btc_{plan_id}")]
     ])
 
-    text = get_string("select_method", lang=lang, plan_name=plan['name'], price=plan['price'], price_usd=price_usd)
+    text = get_string("select_method", lang=lang, plan_name=plan['name'], price_usd=price_usd)
     await callback_query.edit_message_text(text, reply_markup=keyboard)
-
-@Client.on_callback_query(filters.regex("^pay_upi_"))
-async def pay_upi_handler(client, callback_query):
-    user_id = callback_query.from_user.id
-    lang = await get_user_lang(user_id)
-    plan_id = callback_query.data.split("_")[-1]
-
-    plan = await plans_col.find_one({"plan_id": plan_id})
-    price = plan["price"] if plan else await get_setting("price", 199)
-
-    await show_payment_instructions(client, user_id, lang, price, plan)
-    await callback_query.message.delete()
-
-async def show_payment_instructions(client, user_id, lang, price, plan=None):
-    upi_id = await get_setting("upi_id", "example@upi")
-
-    pay_text = await get_setting(f"pay_instr_{lang}", get_string("pay_instr", lang=lang, price=price, upi_id=upi_id))
-    if "{price}" in pay_text or "{upi_id}" in pay_text:
-        try:
-            pay_text = pay_text.format(price=price, upi_id=upi_id)
-        except:
-            pass
-
-    keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton(get_string("btn_i_have_paid", lang=lang), callback_data="i_have_paid")]
-    ])
-
-    # Prioritize: Plan-specific QR > Instruction Image > Global QR
-    instr_channel = None
-    instr_id = None
-
-    if plan:
-        instr_channel = plan.get("qr_channel_id")
-        instr_id = plan.get("qr_message_id")
-
-    if not instr_channel:
-        instr_channel = await get_setting("instr_img_channel")
-        instr_id = await get_setting("instr_img_id")
-
-    if not instr_channel:
-        instr_channel = await get_setting("qr_channel_id")
-        instr_id = await get_setting("qr_message_id")
-
-    sent_msg = await send_custom_msg(client, user_id, "instr", pay_text, reply_markup=keyboard)
-
-    if sent_msg and not getattr(sent_msg, "photo", None) and instr_channel and instr_id:
-        try:
-            await sent_msg.delete()
-            sent_msg = await client.copy_message(
-                chat_id=user_id,
-                from_chat_id=instr_channel,
-                message_id=instr_id,
-                caption=pay_text,
-                reply_markup=keyboard
-            )
-        except Exception as e:
-            print(f"Error copying instruction/QR code: {e}")
-
-    if sent_msg:
-        asyncio.create_task(delete_after(sent_msg, 600))
 
 async def delete_after(message, delay):
     await asyncio.sleep(delay)
