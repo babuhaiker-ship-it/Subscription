@@ -83,7 +83,7 @@ async def btc_payment_init_handler(client, callback_query):
         inv_id = str(res.inserted_id)
 
     expiry_str = expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
-    text = get_string("btc_instr", lang=lang, plan_name=plan["name"], days=days, btc_amount=btc_amount, price=price, address=btc_address, expiry_str=expiry_str)
+    text = get_string("btc_instr", lang=lang, plan_name=plan["name"], days=days, btc_amount=btc_amount, price_usd=price_usd, address=btc_address, expiry_str=expiry_str)
 
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_check_btc", lang=lang), callback_data=f"check_btc_{inv_id}")]
