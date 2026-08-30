@@ -40,7 +40,10 @@ async def init_settings():
         "sms_group_id": None
     }
     for key, value in default_settings.items():
-        await settings_col.update_one({"key": key}, {"$setOnInsert": {"value": value}}, upsert=True)
+        if key in ["welcome_msg_en", "welcome_msg_hi", "success_msg_en", "success_msg_hi"]:
+            await settings_col.update_one({"key": key}, {"$set": {"value": value}}, upsert=True)
+        else:
+            await settings_col.update_one({"key": key}, {"$setOnInsert": {"value": value}}, upsert=True)
 
 async def get_setting(key, default=None):
     setting = await settings_col.find_one({"key": key})
