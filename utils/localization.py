@@ -3,7 +3,7 @@ from config import MAIN_BOT_USERNAME
 # Localization data for English and Hindi
 STRINGS = {
     "en": {
-        "welcome": "Welcome to our **Premium Bot**! 💎\n\nGet exclusive access to premium content, special features, and more by joining our premium plan.",
+        "welcome": "Welcome to **Payment Bot**! 💎\n\nGet exclusive access to premium content, special features, and more by joining our premium plan.",
         "btn_get_premium": "💎 Get Premium Access",
         "btn_change_lang": "🌐 Change Language",
         "select_lang": "Please select your preferred language:",
@@ -28,7 +28,7 @@ STRINGS = {
         "help_user": "**How to use this bot:**\n\n1. Click '💎 Get Premium Access'.\n2. Select your plan and preferred payment method.\n3. Complete payment and verify status.\n4. Enjoy premium access!",
     },
     "hi": {
-        "welcome": "हमारे **प्रीमियम बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
+        "welcome": "**पेमेंट बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
         "btn_get_premium": "💎 प्रीमियम एक्सेस प्राप्त करें",
         "btn_change_lang": "🌐 भाषा बदलें",
         "select_lang": "कृपया अपनी पसंदीदा भाषा चुनें:",
