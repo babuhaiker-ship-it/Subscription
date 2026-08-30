@@ -86,10 +86,17 @@ async def btc_payment_init_handler(client, callback_query):
     text = get_string("btc_instr", lang=lang, plan_name=plan["name"], days=days, btc_amount=btc_amount, price_usd=price_usd, address=btc_address, expiry_str=expiry_str)
 
     keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton(get_string("btn_check_btc", lang=lang), callback_data=f"check_btc_{inv_id}")]
+        [types.InlineKeyboardButton(get_string("btn_check_btc", lang=lang), callback_data=f"check_btc_{inv_id}")],
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="get_premium")]
     ])
 
-    await callback_query.edit_message_text(text, reply_markup=keyboard)
+    sent_msg = await callback_query.edit_message_text(text, reply_markup=keyboard)
+
+    # Schedule auto deletion when the invoice expires (e.g., expiry_minutes)
+    delay_seconds = int((expiry_dt - now_utc).total_seconds())
+    if delay_seconds > 0:
+        from handlers.user import delete_after
+        asyncio.create_task(delete_after(callback_query.message, delay_seconds))
 
 @Client.on_callback_query(filters.regex("^check_btc_"))
 async def check_btc_payment_handler(client, callback_query):

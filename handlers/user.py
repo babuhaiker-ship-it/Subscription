@@ -91,7 +91,8 @@ async def get_premium_handler(client, callback_query):
         # Fallback to default price
         price_usd = await get_setting("price_usd", 3.99)
         keyboard = types.InlineKeyboardMarkup([
-            [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price_usd=price_usd), callback_data="pay_btc_default")]
+            [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price_usd=price_usd), callback_data="pay_btc_default")],
+            [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="get_premium")]
         ])
         text = get_string("select_method", lang=lang, plan_name="Monthly Plan", price_usd=price_usd)
         await callback_query.edit_message_text(text, reply_markup=keyboard)
@@ -113,7 +114,8 @@ async def select_plan_handler(client, callback_query):
     price_usd = plan.get("price_usd", round(plan.get("price", 3.99) / 88.0, 2))
 
     keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price_usd=price_usd), callback_data=f"pay_btc_{plan_id}")]
+        [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price_usd=price_usd), callback_data=f"pay_btc_{plan_id}")],
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="get_premium")]
     ])
 
     text = get_string("select_method", lang=lang, plan_name=plan['name'], price_usd=price_usd)
