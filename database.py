@@ -1,6 +1,6 @@
 import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
-from config import MONGO_URI, DB_NAME, MAIN_BOT_DB_NAME, DEFAULT_PRICE, DEFAULT_UPI_ID, DEFAULT_QR_URL, OWNER_ID
+from config import MONGO_URI, DB_NAME, MAIN_BOT_DB_NAME, DEFAULT_PRICE, DEFAULT_QR_URL, OWNER_ID
 
 client = AsyncIOMotorClient(MONGO_URI)
 db = client[DB_NAME]
@@ -11,6 +11,7 @@ users_col = db.users
 main_tokens_col = main_db['tokens'] if main_db is not None else None
 plans_col = db.plans
 payments_col = db.payments  # Unclaimed payments from SMS
+btc_payments_col = db.btc_payments # Bitcoin invoices & payments
 settings_col = db.settings
 admins_col = db.admins  # Store admin IDs
 
@@ -18,12 +19,15 @@ async def init_settings():
     """Initializes default settings in the database if not present."""
     default_settings = {
         "price": DEFAULT_PRICE,
-        "upi_id": DEFAULT_UPI_ID,
+        "price_usd": 3.99,
         "qr_url": DEFAULT_QR_URL,
-        "welcome_msg_en": "Welcome to **SpicyNyraa's Premium Bot**! 💎\n\nGet exclusive access to premium content, special features, and more by joining our premium plan.",
-        "welcome_msg_hi": "**SpicyNyraa के प्रीमियम बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
-        "success_msg_en": "🎉 **Payment Verified!**\n\nYou now have 30 days of premium access. Go to @SpicyNyraa_bot and send /start to begin!",
-        "success_msg_hi": "🎉 **भुगतान सत्यापित!**\n\nअब आपके पास 30 दिनों का प्रीमियम एक्सेस है। @SpicyNyraa_bot पर जाएं और शुरू करने के लिए /start भेजें!",
+        "btc_xpub": "",
+        "btc_address_index": 0,
+        "btc_expiry_minutes": 60,
+        "welcome_msg_en": "Welcome to **Payment Bot**! 💎\n\nGet exclusive access to premium content, special features, and more by joining our premium plan.",
+        "welcome_msg_hi": "**पेमेंट बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
+        "success_msg_en": "🎉 **Payment Verified!**\n\nYou now have premium access. Send /start to begin!",
+        "success_msg_hi": "🎉 **भुगतान सत्यापित!**\n\nअब आपके पास प्रीमियम एक्सेस है। शुरू करने के लिए /start भेजें!",
         "qr_channel_id": None,
         "qr_message_id": None,
         "welcome_img_channel": None,
@@ -36,7 +40,10 @@ async def init_settings():
         "sms_group_id": None
     }
     for key, value in default_settings.items():
-        await settings_col.update_one({"key": key}, {"$setOnInsert": {"value": value}}, upsert=True)
+        if key in ["welcome_msg_en", "welcome_msg_hi", "success_msg_en", "success_msg_hi"]:
+            await settings_col.update_one({"key": key}, {"$set": {"value": value}}, upsert=True)
+        else:
+            await settings_col.update_one({"key": key}, {"$setOnInsert": {"value": value}}, upsert=True)
 
 async def get_setting(key, default=None):
     setting = await settings_col.find_one({"key": key})
