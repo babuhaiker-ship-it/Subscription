@@ -85,18 +85,39 @@ async def btc_payment_init_handler(client, callback_query):
     expiry_str = expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
     text = get_string("btc_instr", lang=lang, plan_name=plan["name"], days=days, btc_amount=btc_amount, price_usd=price_usd, address=btc_address, expiry_str=expiry_str)
 
+    # Generate QR Code photo URL for Bitcoin deposit address
+    qr_code_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=bitcoin:{btc_address}?amount={btc_amount:.8f}"
+
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_check_btc", lang=lang), callback_data=f"check_btc_{inv_id}")],
         [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="get_premium")]
     ])
 
-    sent_msg = await callback_query.edit_message_text(text, reply_markup=keyboard)
+    # Send QR image with invoice caption or edit message text
+    sent_msg = None
+    try:
+        sent_msg = await client.send_photo(
+            chat_id=user_id,
+            photo=qr_code_url,
+            caption=text,
+            reply_markup=keyboard
+        )
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning(f"Could not send QR photo: {e}, falling back to text edit")
+        try:
+            sent_msg = await callback_query.edit_message_text(text, reply_markup=keyboard)
+        except Exception as edit_err:
+            logger.error(f"Fallback edit failed: {edit_err}")
 
     # Schedule auto deletion when the invoice expires (e.g., expiry_minutes)
     delay_seconds = int((expiry_dt - now_utc).total_seconds())
-    if delay_seconds > 0:
+    if delay_seconds > 0 and sent_msg:
         from handlers.user import delete_after
-        asyncio.create_task(delete_after(callback_query.message, delay_seconds))
+        asyncio.create_task(delete_after(sent_msg, delay_seconds))
 
 @Client.on_callback_query(filters.regex("^check_btc_"))
 async def check_btc_payment_handler(client, callback_query):

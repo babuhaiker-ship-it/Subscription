@@ -33,14 +33,85 @@ async def start_handler(client, message):
 
     # Save user if not exists
     await users_col.update_one({"user_id": user_id}, {"$set": {"user_id": user_id}}, upsert=True)
+    user = await users_col.find_one({"user_id": user_id})
 
-    welcome_text = await get_setting(f"welcome_msg_{lang}", get_string("welcome", lang=lang))
+    is_premium = user.get("is_premium", False) if user else False
+    expiry = user.get("premium_until") if user else None
+
+    if is_premium and expiry:
+        status_badge = "🌟 Premium"
+        expiry_str = expiry.strftime("%Y-%m-%d %H:%M UTC")
+    else:
+        status_badge = "🆓 Free User"
+        expiry_str = "None"
+
+    welcome_template = await get_setting(f"welcome_msg_{lang}", get_string("welcome", lang=lang))
+    try:
+        welcome_text = welcome_template.format(status_badge=status_badge, expiry_str=expiry_str)
+    except Exception:
+        welcome_text = welcome_template
+
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_get_premium", lang=lang), callback_data="get_premium")],
+        [types.InlineKeyboardButton(get_string("btn_my_profile", lang=lang), callback_data="user_profile")],
         [types.InlineKeyboardButton(get_string("btn_change_lang", lang=lang), callback_data="change_lang")]
     ])
 
     await send_custom_msg(client, user_id, "welcome", welcome_text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^user_profile$"))
+async def user_profile_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    lang = await get_user_lang(user_id)
+    user = await users_col.find_one({"user_id": user_id})
+
+    is_premium = user.get("is_premium", False) if user else False
+    expiry = user.get("premium_until") if user else None
+
+    if is_premium and expiry:
+        status_badge = "🌟 Premium"
+        expiry_str = expiry.strftime("%Y-%m-%d %H:%M UTC")
+    else:
+        status_badge = "🆓 Free User"
+        expiry_str = "None"
+
+    text = get_string("profile_text", lang=lang, user_id=user_id, status_badge=status_badge, expiry_str=expiry_str)
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton(get_string("btn_get_premium", lang=lang), callback_data="get_premium")],
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="main_start_menu")]
+    ])
+
+    await callback_query.edit_message_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^main_start_menu$"))
+async def main_start_menu_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    lang = await get_user_lang(user_id)
+    user = await users_col.find_one({"user_id": user_id})
+
+    is_premium = user.get("is_premium", False) if user else False
+    expiry = user.get("premium_until") if user else None
+
+    if is_premium and expiry:
+        status_badge = "🌟 Premium"
+        expiry_str = expiry.strftime("%Y-%m-%d %H:%M UTC")
+    else:
+        status_badge = "🆓 Free User"
+        expiry_str = "None"
+
+    welcome_template = await get_setting(f"welcome_msg_{lang}", get_string("welcome", lang=lang))
+    try:
+        welcome_text = welcome_template.format(status_badge=status_badge, expiry_str=expiry_str)
+    except Exception:
+        welcome_text = welcome_template
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton(get_string("btn_get_premium", lang=lang), callback_data="get_premium")],
+        [types.InlineKeyboardButton(get_string("btn_my_profile", lang=lang), callback_data="user_profile")],
+        [types.InlineKeyboardButton(get_string("btn_change_lang", lang=lang), callback_data="change_lang")]
+    ])
+
+    await callback_query.edit_message_text(welcome_text, reply_markup=keyboard)
 
 @Client.on_callback_query(filters.regex("^change_lang$"))
 async def change_lang_handler(client, callback_query):

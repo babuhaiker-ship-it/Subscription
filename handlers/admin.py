@@ -9,18 +9,68 @@ async def admin_help_handler(client, message):
     user_id = message.from_user.id
     if not await is_admin(user_id):
         return
+    await show_admin_dashboard(client, message, user_id, is_edit=False)
 
-    lang = await get_user_lang(user_id)
-    help_text = get_string("admin_help", lang=lang)
-    if user_id == OWNER_ID:
-        help_text += "\n/addadmin <user_id> - Add a new admin (Owner only)"
-    help_text += "\n/setdatabase - Set image database (reply to forwarded message)"
-    help_text += "\n/btcsettings - Manage Bitcoin / XPUB configuration"
-    help_text += "\n/debug - View current bot configuration"
-    help_text += "\n/managesub - Manage subscription plans"
-    help_text += "\n/premiumusers - List all premium users"
-    help_text += "\n/addpayment <txn_id> <amount> - Manually add a payment record"
-    await message.reply_text(help_text)
+async def show_admin_dashboard(client, message_or_query, user_id, is_edit=True):
+    total_users, premium_users, revenue = await get_db_stats()
+    price_usd = await get_setting("price_usd", 3.99)
+    btc_xpub = await get_setting("btc_xpub", "")
+
+    text = "👑 **Admin Control Dashboard**\n\n"
+    text += f"📊 **Stats:** Users: `{total_users}` | Premium: `{premium_users}`\n"
+    text += f"💵 **Default Price:** `${price_usd:.2f}` USD\n"
+    text += f"₿ **Bitcoin XPUB:** `{'Configured ✅' if btc_xpub else 'Not Set ❌'}`\n\n"
+    text += "Select an option below to configure your bot:"
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("💎 Plan Manager", callback_data="admin_add_plan"), types.InlineKeyboardButton("📜 List Plans", callback_data="admin_list_plans")],
+        [types.InlineKeyboardButton("₿ Bitcoin Settings", callback_data="admin_back_btc_settings"), types.InlineKeyboardButton("👥 Premium Users", callback_data="admin_back_premium")],
+        [types.InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_dashboard_stats"), types.InlineKeyboardButton("🔎 Debug Info", callback_data="admin_dashboard_debug")]
+    ])
+
+    if is_edit:
+        await message_or_query.edit_message_text(text, reply_markup=keyboard)
+    else:
+        await message_or_query.reply_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_dashboard_stats$"))
+async def admin_dashboard_stats_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+    total_users, premium_users, revenue = await get_db_stats()
+    text = f"📊 **Detailed Statistics:**\n\n• Total Users: `{total_users}`\n• Active Premium Users: `{premium_users}`\n• Total Revenue: `${revenue:.2f}`"
+    keyboard = types.InlineKeyboardMarkup([[types.InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back_dashboard")]])
+    await callback_query.edit_message_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_dashboard_debug$"))
+async def admin_dashboard_debug_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+    price_usd = await get_setting("price_usd", 3.99)
+    img_db = await get_setting("img_db_channel")
+    btc_xpub = await get_setting("btc_xpub", "")
+    btc_idx = await get_setting("btc_address_index", 0)
+    btc_expiry = await get_setting("btc_expiry_minutes", 60)
+
+    debug_text = "🔎 **Bot Debug Info:**\n\n"
+    debug_text += f"💵 **Default Price:** `${price_usd:.2f}` USD\n"
+    debug_text += f"🖼 **Image DB:** `{img_db or 'Not Set'}`\n"
+    debug_text += f"₿ **Bitcoin XPUB:** `{btc_xpub[:15]}...` ({'Configured' if btc_xpub else 'Not Set'})\n"
+    debug_text += f"🔢 **BTC Address Index:** `{btc_idx}`\n"
+    debug_text += f"⏱ **BTC Expiry:** `{btc_expiry}` mins\n"
+    debug_text += f"👑 **Owner ID:** `{OWNER_ID}`\n"
+
+    keyboard = types.InlineKeyboardMarkup([[types.InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back_dashboard")]])
+    await callback_query.edit_message_text(debug_text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_back_dashboard$"))
+async def admin_back_dashboard_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+    await show_admin_dashboard(client, callback_query.message, user_id, is_edit=True)
 
 @Client.on_message(filters.command("stats") & filters.private)
 async def stats_handler(client, message):
