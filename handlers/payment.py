@@ -277,7 +277,7 @@ async def i_have_paid_handler(client, callback_query):
     await callback_query.message.reply_text(ask_txn_text)
     await callback_query.answer()
 
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "admin", "stats", "setprice", "setupi", "setqr", "help", "help_admin", "setwelcome", "setsuccess", "setinstr", "addadmin", "managesub"]))
+@Client.on_message(filters.private & filters.text & ~filters.command(["start", "admin", "stats", "setprice", "setqr", "help", "help_admin", "setwelcome", "setsuccess", "setinstr", "addadmin", "managesub"]))
 async def payment_submission_handler(client, message):
     user_id = message.from_user.id
     user = await users_col.find_one({"user_id": user_id})
@@ -293,10 +293,8 @@ async def payment_submission_handler(client, message):
     price = plan["price"] if plan else await get_setting("price", 199)
     days = plan["days"] if plan else 30
 
-    # User sends only the Transaction ID / UTR now
     user_txn_id = message.text.strip()
 
-    # Basic validation: Indian UPI UTRs are usually 12 digits, but we can be flexible
     if not user_txn_id or len(user_txn_id) < 8:
         await message.reply_text(get_string("error_invalid_format", lang=lang, price=price))
         return
