@@ -90,6 +90,9 @@ async def main():
     try:
         await app.start()
         print("Bot started!")
+        # Start subscription expiry reminder background loop
+        from utils.reminders import start_expiry_reminder_loop
+        asyncio.create_task(start_expiry_reminder_loop(app))
     except Exception as e:
         print(f"CRITICAL: Failed to start Pyrogram client: {e}")
 

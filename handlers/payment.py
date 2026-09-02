@@ -218,6 +218,43 @@ async def check_btc_payment_handler(client, callback_query):
     from handlers.user import send_custom_msg
     await send_custom_msg(client, user_id, "success", success_text)
 
+    # Broadcast notification to admins
+    asyncio.create_task(broadcast_admin_sale_notification(
+        client=client,
+        user_id=user_id,
+        plan_name=plan["name"] if plan else "Monthly Plan",
+        btc_amount=req_btc,
+        price_usd=invoice.get("price_usd", 3.99),
+        txid=valid_tx["txid"]
+    ))
+
+async def broadcast_admin_sale_notification(client, user_id, plan_name, btc_amount, price_usd, txid):
+    from database import admins_col, OWNER_ID
+    try:
+        chat = await client.get_chat(user_id)
+        user_str = f"@{chat.username}" if chat.username else f"{chat.first_name} (`{user_id}`)"
+    except Exception:
+        user_str = f"`{user_id}`"
+
+    admin_msg = (
+        f"🎉 **New Successful Sale!**\n\n"
+        f"👤 **Customer:** {user_str}\n"
+        f"📦 **Plan Purchased:** {plan_name}\n"
+        f"💰 **Amount Paid:** `{btc_amount:.8f} BTC` (${price_usd:.2f} USD)\n"
+        f"🔗 **TXID:** `{txid}`"
+    )
+
+    admin_docs = await admins_col.find().to_list(100)
+    admin_ids = set([doc["user_id"] for doc in admin_docs])
+    if OWNER_ID:
+        admin_ids.add(OWNER_ID)
+
+    for aid in admin_ids:
+        try:
+            await client.send_message(aid, admin_msg)
+        except Exception as e:
+            logger.warning(f"Failed to send admin sale notification to {aid}: {e}")
+
 # Helper to get user's language
 from handlers.user import get_user_lang
 
