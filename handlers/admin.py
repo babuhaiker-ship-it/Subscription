@@ -515,15 +515,21 @@ async def show_plan_creation_menu(message, user_id):
     days_text = f"✅ Days: {temp.get('days')}" if temp.get('days') else "❌ Days"
     price_usd_text = f"✅ Price (USD): ${temp.get('price_usd')}" if temp.get('price_usd') else "💵 Price (USD)"
 
-    keyboard = types.InlineKeyboardMarkup([
+    buttons = [
         [types.InlineKeyboardButton(name_text, callback_data="admin_set_plan_name")],
         [types.InlineKeyboardButton(days_text, callback_data="admin_set_plan_days")],
         [types.InlineKeyboardButton(price_usd_text, callback_data="admin_set_plan_priceusd")],
-        [types.InlineKeyboardButton("✔️ Confirm", callback_data="admin_confirm_plan")],
-        [types.InlineKeyboardButton("🔙 Back", callback_data="admin_managesub_back")]
-    ])
+        [types.InlineKeyboardButton("✔️ Confirm", callback_data="admin_confirm_plan")]
+    ]
 
-    text = "🛠 **Plan Editor**\n\nFill all details below and click Confirm."
+    # Show Delete button if editing an existing plan
+    if temp.get("plan_id"):
+        buttons.append([types.InlineKeyboardButton("🗑 Delete Plan", callback_data=f"admin_delete_plan_{temp['plan_id']}")])
+
+    buttons.append([types.InlineKeyboardButton("🔙 Back", callback_data="admin_managesub_back")])
+
+    keyboard = types.InlineKeyboardMarkup(buttons)
+    text = "🛠 **Plan Editor**\n\nFill all details below and click Confirm or Delete."
     await message.edit_text(text, reply_markup=keyboard)
 
 @Client.on_callback_query(filters.regex("^admin_set_plan_"))
