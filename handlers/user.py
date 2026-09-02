@@ -150,8 +150,9 @@ async def get_premium_handler(client, callback_query):
         # Show plan selection
         keyboard = []
         for plan in plans:
+            p_usd = plan.get("price_usd", round(plan.get("price", 3.99) / 88.0, 2))
             keyboard.append([
-                types.InlineKeyboardButton(f"{plan['name']} - ₹{plan['price']}", callback_data=f"select_plan_{plan['plan_id']}")
+                types.InlineKeyboardButton(f"{plan['name']} - ${p_usd:.2f}", callback_data=f"select_plan_{plan['plan_id']}")
             ])
 
         await callback_query.edit_message_text(
