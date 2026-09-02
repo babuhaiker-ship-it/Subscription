@@ -513,13 +513,11 @@ async def show_plan_creation_menu(message, user_id):
 
     name_text = f"✅ Name: {temp.get('name')}" if temp.get('name') else "❌ Name"
     days_text = f"✅ Days: {temp.get('days')}" if temp.get('days') else "❌ Days"
-    price_text = f"✅ Price (INR): ₹{temp.get('price')}" if temp.get('price') else "❌ Price (INR)"
-    price_usd_text = f"✅ Price (USD): ${temp.get('price_usd')}" if temp.get('price_usd') else "💵 Set Price (USD - Optional)"
+    price_usd_text = f"✅ Price (USD): ${temp.get('price_usd')}" if temp.get('price_usd') else "💵 Price (USD)"
 
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(name_text, callback_data="admin_set_plan_name")],
         [types.InlineKeyboardButton(days_text, callback_data="admin_set_plan_days")],
-        [types.InlineKeyboardButton(price_text, callback_data="admin_set_plan_price")],
         [types.InlineKeyboardButton(price_usd_text, callback_data="admin_set_plan_priceusd")],
         [types.InlineKeyboardButton("✔️ Confirm", callback_data="admin_confirm_plan")],
         [types.InlineKeyboardButton("🔙 Back", callback_data="admin_managesub_back")]
@@ -548,8 +546,9 @@ async def admin_confirm_plan_callback(client, callback_query):
     user = await users_col.find_one({"user_id": user_id})
     temp = user.get("temp_plan", {})
 
-    if not all([temp.get("name"), temp.get("days"), temp.get("price")]):
-        await callback_query.answer("❌ Please fill all details first!", show_alert=True)
+    price_usd_val = temp.get("price_usd") or temp.get("price")
+    if not all([temp.get("name"), temp.get("days"), price_usd_val]):
+        await callback_query.answer("❌ Please fill all details (Name, Days, Price in USD) first!", show_alert=True)
         return
 
     plan_id = temp.get("plan_id") or str(uuid.uuid4())[:8]
@@ -558,8 +557,8 @@ async def admin_confirm_plan_callback(client, callback_query):
         "plan_id": plan_id,
         "name": temp["name"],
         "days": temp["days"],
-        "price": float(temp["price"]),
-        "price_usd": float(temp.get("price_usd")) if temp.get("price_usd") else float(temp["price"]) / 88.0
+        "price_usd": float(price_usd_val),
+        "price": float(price_usd_val) * 88.0
     }
 
     await plans_col.update_one({"plan_id": plan_id}, {"$set": plan_doc}, upsert=True)
@@ -581,8 +580,9 @@ async def admin_list_plans_callback(client, callback_query):
 
     keyboard = []
     for plan in plans:
+        p_usd = plan.get("price_usd", round(plan.get("price", 3.99) / 88.0, 2))
         keyboard.append([
-            types.InlineKeyboardButton(f"{plan['name']} (₹{plan['price']})", callback_data=f"admin_view_plan_{plan['plan_id']}")
+            types.InlineKeyboardButton(f"{plan['name']} (${p_usd:.2f})", callback_data=f"admin_view_plan_{plan['plan_id']}")
         ])
 
     keyboard.append([types.InlineKeyboardButton("🔙 Back", callback_data="admin_managesub_back")])
@@ -602,10 +602,11 @@ async def admin_view_plan_callback(client, callback_query):
         await callback_query.answer("Plan not found.", show_alert=True)
         return
 
+    p_usd = plan.get("price_usd", round(plan.get("price", 3.99) / 88.0, 2))
     text = f"💎 **Plan Details:**\n\n"
     text += f"🏷 **Name:** {plan['name']}\n"
     text += f"📅 **Days:** {plan['days']}\n"
-    text += f"💰 **Price:** ₹{plan['price']}\n"
+    text += f"💵 **Price:** ${p_usd:.2f} USD\n"
 
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton("📝 Edit", callback_data=f"admin_edit_plan_{plan_id}")],
