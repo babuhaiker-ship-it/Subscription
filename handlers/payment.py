@@ -1,5 +1,5 @@
 from pyrogram import Client, filters, types
-from database import users_col, payments_col, btc_payments_col, get_setting, set_setting, main_tokens_col, plans_col
+from database import users_col, payments_col, btc_payments_col, get_setting, set_setting, main_tokens_col, main_users_col, plans_col
 from utils.localization import get_string
 from utils.btc import derive_btc_address, inr_to_btc, usd_to_btc, check_btc_address_transactions
 from datetime import datetime, timedelta
@@ -197,20 +197,29 @@ async def check_btc_payment_handler(client, callback_query):
         }}
     )
 
-    # Sync with main bot database
+    # Sync Red Token & User Status with main bot database schema
+    duration_seconds = days * 86400
     token_doc = {
         'token_id': str(uuid.uuid4()),
         'created_at': now_utc,
         'expires_at': premium_expiry,
-        'is_admin_granted': True
+        'duration_seconds': duration_seconds,
+        'is_admin_granted': True,
+        'is_activated': True
     }
     if main_tokens_col is not None:
         try:
             await main_tokens_col.update_one(
-                {'user_id': user_id},
+                {'user_id': int(user_id)},
                 {'$push': {'tokens': token_doc}},
                 upsert=True
             )
+            if main_users_col is not None:
+                await main_users_col.update_one(
+                    {'user_id': int(user_id)},
+                    {'$set': {'last_premium_check_status': True}},
+                    upsert=True
+                )
         except Exception as e:
             logger.error(f"Failed to write premium token to main bot DB for BTC user {user_id}: {e}")
 

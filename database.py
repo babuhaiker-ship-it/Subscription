@@ -9,6 +9,7 @@ main_db = client[MAIN_BOT_DB_NAME] if MAIN_BOT_DB_NAME else None
 # Collections
 users_col = db.users
 main_tokens_col = main_db['tokens'] if main_db is not None else None
+main_users_col = main_db['users'] if main_db is not None else None
 plans_col = db.plans
 payments_col = db.payments  # Unclaimed payments from SMS
 btc_payments_col = db.btc_payments # Bitcoin invoices & payments
