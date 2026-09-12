@@ -1,7 +1,8 @@
 from pyrogram import Client, filters, types
-from database import users_col, payments_col, btc_payments_col, get_setting, set_setting, main_tokens_col, main_users_col, plans_col
+from database import users_col, payments_col, btc_payments_col, xmr_payments_col, get_setting, set_setting, main_tokens_col, main_users_col, plans_col
 from utils.localization import get_string
 from utils.btc import derive_btc_address, inr_to_btc, usd_to_btc, check_btc_address_transactions
+from utils.xmr import usd_to_xmr
 from datetime import datetime, timedelta
 import pytz
 import asyncio
@@ -118,6 +119,125 @@ async def btc_payment_init_handler(client, callback_query):
     if delay_seconds > 0 and sent_msg:
         from handlers.user import delete_after
         asyncio.create_task(delete_after(sent_msg, delay_seconds))
+
+@Client.on_callback_query(filters.regex("^pay_xmr_"))
+async def xmr_payment_init_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    lang = await get_user_lang(user_id)
+    plan_id = callback_query.data.split("_")[-1]
+
+    if plan_id == "default":
+        price_inr = await get_setting("price", 199)
+        price_usd = await get_setting("price_usd", 3.99)
+        days = 30
+        plan = {"name": "Monthly Plan", "price": price_inr, "price_usd": price_usd, "days": days, "plan_id": "default"}
+    else:
+        plan = await plans_col.find_one({"plan_id": plan_id})
+        if not plan:
+            await callback_query.answer("Plan not found.", show_alert=True)
+            return
+        price_inr = plan["price"]
+        price_usd = plan.get("price_usd", round(price_inr / 88.0, 2))
+        days = plan["days"]
+
+    xmr_address = await get_setting("xmr_address", "")
+    if not xmr_address:
+        await callback_query.answer("❌ Monero payment method is currently disabled or address is not configured by admin.", show_alert=True)
+        return
+    expiry_minutes = await get_setting("xmr_expiry_minutes", 60)
+
+    now_utc = datetime.now(pytz.utc)
+    active_inv = await xmr_payments_col.find_one({
+        "user_id": user_id,
+        "plan_id": plan_id,
+        "is_claimed": False,
+        "expires_at": {"$gt": now_utc}
+    })
+
+    if active_inv:
+        xmr_amount = active_inv["xmr_amount"]
+        expiry_dt = active_inv["expires_at"]
+        inv_id = str(active_inv["_id"])
+    else:
+        xmr_amount = await usd_to_xmr(price_usd)
+        expiry_dt = now_utc + timedelta(minutes=expiry_minutes)
+
+        inv_doc = {
+            "user_id": user_id,
+            "plan_id": plan_id,
+            "address": xmr_address,
+            "xmr_amount": xmr_amount,
+            "price_usd": price_usd,
+            "created_at": now_utc,
+            "expires_at": expiry_dt,
+            "is_claimed": False
+        }
+        res = await xmr_payments_col.insert_one(inv_doc)
+        inv_id = str(res.inserted_id)
+
+    expiry_str = expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
+    text = get_string("xmr_instr", lang=lang, plan_name=plan["name"], days=days, xmr_amount=xmr_amount, price_usd=price_usd, address=xmr_address, expiry_str=expiry_str)
+
+    qr_code_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=monero:{xmr_address}?tx_amount={xmr_amount:.6f}"
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton(get_string("btn_check_xmr", lang=lang), callback_data=f"check_xmr_{inv_id}")],
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="get_premium")]
+    ])
+
+    sent_msg = None
+    try:
+        sent_msg = await client.send_photo(
+            chat_id=user_id,
+            photo=qr_code_url,
+            caption=text,
+            reply_markup=keyboard
+        )
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning(f"Could not send XMR QR photo: {e}, falling back to text edit")
+        try:
+            sent_msg = await callback_query.edit_message_text(text, reply_markup=keyboard)
+        except Exception as edit_err:
+            logger.error(f"Fallback edit failed: {edit_err}")
+
+    delay_seconds = int((expiry_dt - now_utc).total_seconds())
+    if delay_seconds > 0 and sent_msg:
+        from handlers.user import delete_after
+        asyncio.create_task(delete_after(sent_msg, delay_seconds))
+
+@Client.on_callback_query(filters.regex("^check_xmr_"))
+async def check_xmr_payment_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    lang = await get_user_lang(user_id)
+    inv_id = callback_query.data.split("_")[-1]
+
+    from bson import ObjectId
+    try:
+        invoice = await xmr_payments_col.find_one({"_id": ObjectId(inv_id)})
+    except Exception:
+        invoice = None
+
+    if not invoice:
+        await callback_query.answer("❌ Invoice not found.", show_alert=True)
+        return
+
+    if invoice.get("is_claimed"):
+        await callback_query.answer("✅ This Monero payment has already been verified!", show_alert=True)
+        return
+
+    now_utc = datetime.now(pytz.utc)
+    if invoice.get("expires_at") and invoice["expires_at"].tzinfo is None:
+        invoice["expires_at"] = pytz.utc.localize(invoice["expires_at"])
+
+    if now_utc > invoice["expires_at"]:
+        await callback_query.answer("❌ This Monero payment invoice has expired. Please select a plan again.", show_alert=True)
+        return
+
+    await callback_query.answer("⏳ Please send transaction hash/ID or contact admin after sending XMR.", show_alert=True)
 
 @Client.on_callback_query(filters.regex("^check_btc_"))
 async def check_btc_payment_handler(client, callback_query):

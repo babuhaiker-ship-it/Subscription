@@ -164,6 +164,7 @@ async def get_premium_handler(client, callback_query):
         price_usd = await get_setting("price_usd", 3.99)
         keyboard = types.InlineKeyboardMarkup([
             [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price_usd=price_usd), callback_data="pay_btc_default")],
+            [types.InlineKeyboardButton(get_string("btn_pay_xmr", lang=lang, price_usd=price_usd), callback_data="pay_xmr_default")],
             [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="main_start_menu")]
         ])
         text = get_string("select_method", lang=lang, plan_name="Monthly Plan", days=30, price_usd=price_usd)
@@ -188,6 +189,7 @@ async def select_plan_handler(client, callback_query):
 
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_pay_btc", lang=lang, price_usd=price_usd), callback_data=f"pay_btc_{plan_id}")],
+        [types.InlineKeyboardButton(get_string("btn_pay_xmr", lang=lang, price_usd=price_usd), callback_data=f"pay_xmr_{plan_id}")],
         [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="get_premium")]
     ])
 

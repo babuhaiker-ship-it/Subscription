@@ -13,6 +13,7 @@ main_users_col = main_db['users'] if main_db is not None else None
 plans_col = db.plans
 payments_col = db.payments  # Unclaimed payments from SMS
 btc_payments_col = db.btc_payments # Bitcoin invoices & payments
+xmr_payments_col = db.xmr_payments # Monero invoices & payments
 settings_col = db.settings
 admins_col = db.admins  # Store admin IDs
 
@@ -25,6 +26,8 @@ async def init_settings():
         "btc_xpub": "",
         "btc_address_index": 0,
         "btc_expiry_minutes": 60,
+        "xmr_address": "",
+        "xmr_expiry_minutes": 60,
         "welcome_msg_en": "Welcome to **Payment Bot**! 💎\n\nGet exclusive access to premium content, special features, and more by joining our premium plan.",
         "welcome_msg_hi": "**पेमेंट बॉट** में आपका स्वागत है! 💎\n\nहमारे प्रीमियम प्लान में शामिल होकर विशेष सामग्री और सुविधाओं तक पहुँच प्राप्त करें।",
         "success_msg_en": "🎉 **Payment Verified!**\n\nYou now have premium access. Send /start to begin!",
