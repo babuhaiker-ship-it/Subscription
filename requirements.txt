@@ -5,3 +5,6 @@ pytz
 shortzy
 python-dotenv
 tgcrypto
+base58
+ecdsa
+requests
