@@ -8,3 +8,6 @@ tgcrypto
 base58
 ecdsa
 requests
+fastapi
+uvicorn
+pydantic
