@@ -17,3 +17,9 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 DEFAULT_PRICE = 3.99
 DEFAULT_QR_URL = ""
 MAIN_BOT_USERNAME = "@PremiumContent_bot"
+
+# Monero Payment Gateway Settings
+MONERO_ADDRESS = os.getenv("MONERO_ADDRESS", "")
+MONERO_RPC_URL = os.getenv("MONERO_RPC_URL", "")
+MONERO_RPC_USER = os.getenv("MONERO_RPC_USER", "")
+MONERO_RPC_PASSWORD = os.getenv("MONERO_RPC_PASSWORD", "")
