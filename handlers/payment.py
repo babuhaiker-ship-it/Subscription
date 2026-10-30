@@ -90,7 +90,7 @@ async def btc_payment_init_handler(client, callback_query):
 
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_check_btc", lang=lang), callback_data=f"check_btc_{inv_id}")],
-        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="get_premium")]
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data=f"ask_cancel_btc_{inv_id}")]
     ])
 
     # Send QR image with invoice caption or edit message text
@@ -118,6 +118,62 @@ async def btc_payment_init_handler(client, callback_query):
     if delay_seconds > 0 and sent_msg:
         from handlers.user import delete_after
         asyncio.create_task(delete_after(sent_msg, delay_seconds))
+
+@Client.on_callback_query(filters.regex("^ask_cancel_btc_"))
+async def ask_cancel_btc_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    inv_id = callback_query.data.split("_")[-1]
+
+    text = (
+        "⚠️ **Cancel Active Payment Invoice?**\n\n"
+        "Going back will cancel this active deposit invoice session so you do not accidentally send funds to a cancelled or expired address.\n\n"
+        "Are you sure you want to cancel this payment session?"
+    )
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("❌ Yes, Cancel Session", callback_data=f"confirm_cancel_btc_{inv_id}")],
+        [types.InlineKeyboardButton("🔙 No, Stay on Invoice", callback_data=f"resume_btc_inv_{inv_id}")]
+    ])
+
+    await callback_query.message.reply_text(text, reply_markup=keyboard)
+    await callback_query.answer()
+
+@Client.on_callback_query(filters.regex("^confirm_cancel_btc_"))
+async def confirm_cancel_btc_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    inv_id = callback_query.data.split("_")[-1]
+
+    from bson import ObjectId
+    try:
+        # Mark invoice as expired/cancelled in database
+        await btc_payments_col.update_one(
+            {"_id": ObjectId(inv_id), "user_id": user_id, "is_claimed": False},
+            {"$set": {"expires_at": datetime.now(pytz.utc) - timedelta(minutes=1)}}
+        )
+    except Exception as e:
+        logger.error(f"Error cancelling invoice {inv_id}: {e}")
+
+    # Delete the original QR photo message if present
+    qr_msg = callback_query.message.reply_to_message
+    if qr_msg:
+        try:
+            await qr_msg.delete()
+        except Exception:
+            pass
+
+    await callback_query.answer("❌ Payment session cancelled.", show_alert=True)
+
+    # Redirect to get_premium (which edits the confirmation prompt message into payment menu)
+    from handlers.user import get_premium_handler
+    await get_premium_handler(client, callback_query)
+
+@Client.on_callback_query(filters.regex("^resume_btc_inv_"))
+async def resume_btc_inv_handler(client, callback_query):
+    try:
+        await callback_query.message.delete()
+    except Exception:
+        pass
+    await callback_query.answer("Returning to active invoice...")
 
 @Client.on_callback_query(filters.regex("^check_btc_"))
 async def check_btc_payment_handler(client, callback_query):
