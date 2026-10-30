@@ -122,7 +122,8 @@ async def change_lang_handler(client, callback_query):
     lang = await get_user_lang(callback_query.from_user.id)
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton("English 🇬🇧", callback_data="set_lang_en")],
-        [types.InlineKeyboardButton("Hindi 🇮🇳", callback_data="set_lang_hi")]
+        [types.InlineKeyboardButton("Hindi 🇮🇳", callback_data="set_lang_hi")],
+        [types.InlineKeyboardButton("Русский 🇷🇺", callback_data="set_lang_ru")]
     ])
     await callback_query.edit_message_text(get_string("select_lang", lang=lang), reply_markup=keyboard)
 

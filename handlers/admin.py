@@ -201,12 +201,12 @@ async def set_msg_handler(client, message):
 
     cmd = message.command[0]
     if len(message.command) < 3:
-        await message.reply_text(f"Usage: /{cmd} <en/hi> <message text>")
+        await message.reply_text(f"Usage: /{cmd} <en/hi/ru> <message text>")
         return
 
     lang = message.command[1]
-    if lang not in ["en", "hi"]:
-        await message.reply_text("❌ Language must be 'en' or 'hi'.")
+    if lang not in ["en", "hi", "ru"]:
+        await message.reply_text("❌ Language must be 'en', 'hi', or 'ru'.")
         return
 
     text = message.text.split(None, 2)[2]
