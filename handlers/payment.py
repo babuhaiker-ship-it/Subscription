@@ -483,4 +483,8 @@ async def payment_submission_handler(client, message):
         else:
             error_text = get_string("error_not_found", lang=lang)
 
-        await verifying_msg.edit_text(error_text)
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("🔄 Try Again", callback_data="i_have_paid")],
+            [types.InlineKeyboardButton("🔙 Cancel", callback_data="get_premium")]
+        ])
+        await verifying_msg.edit_text(error_text, reply_markup=keyboard)
