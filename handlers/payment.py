@@ -51,11 +51,9 @@ async def btc_payment_init_handler(client, callback_query):
         expiry_dt = active_inv["expires_at"]
         inv_id = str(active_inv["_id"])
     else:
-        # Atomic increment of index
-        settings_doc = await db_get_and_inc_btc_index() if 'db_get_and_inc_btc_index' in globals() else None
-        # Retrieve current index and increment
-        curr_index = await get_setting("btc_address_index", 0)
-        await set_setting("btc_address_index", curr_index + 1)
+        # Atomic increment of index to eliminate race conditions
+        from database import get_and_inc_btc_index
+        curr_index = await get_and_inc_btc_index()
 
         try:
             btc_address = derive_btc_address(xpub, curr_index)
@@ -125,17 +123,21 @@ async def ask_cancel_btc_handler(client, callback_query):
     inv_id = callback_query.data.split("_")[-1]
 
     text = (
-        "⚠️ **Cancel Active Payment Invoice?**\n\n"
-        "Going back will cancel this active deposit invoice session so you do not accidentally send funds to a cancelled or expired address.\n\n"
-        "Are you sure you want to cancel this payment session?"
+        "⚠️ **Cancel Payment Invoice?**\n\n"
+        "Are you sure you want to cancel this invoice?\n\n"
+        "• If you have already sent Bitcoin, tap **'No, Return to Invoice'** and check payment status.\n"
+        "• If you haven't sent funds, it is safe to cancel."
     )
 
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton("❌ Yes, Cancel Session", callback_data=f"confirm_cancel_btc_{inv_id}")],
-        [types.InlineKeyboardButton("🔙 No, Stay on Invoice", callback_data=f"resume_btc_inv_{inv_id}")]
+        [types.InlineKeyboardButton("🔙 No, Return to Invoice", callback_data=f"resume_btc_inv_{inv_id}")]
     ])
 
-    await callback_query.message.reply_text(text, reply_markup=keyboard)
+    try:
+        await callback_query.edit_message_caption(text, reply_markup=keyboard)
+    except Exception:
+        await callback_query.edit_message_text(text, reply_markup=keyboard)
     await callback_query.answer()
 
 @Client.on_callback_query(filters.regex("^confirm_cancel_btc_"))
@@ -153,27 +155,66 @@ async def confirm_cancel_btc_handler(client, callback_query):
     except Exception as e:
         logger.error(f"Error cancelling invoice {inv_id}: {e}")
 
-    # Delete the original QR photo message if present
-    qr_msg = callback_query.message.reply_to_message
-    if qr_msg:
-        try:
-            await qr_msg.delete()
-        except Exception:
-            pass
-
-    await callback_query.answer("❌ Payment session cancelled.", show_alert=True)
-
-    # Redirect to get_premium (which edits the confirmation prompt message into payment menu)
-    from handlers.user import get_premium_handler
-    await get_premium_handler(client, callback_query)
-
-@Client.on_callback_query(filters.regex("^resume_btc_inv_"))
-async def resume_btc_inv_handler(client, callback_query):
+    # Delete the QR photo message completely
     try:
         await callback_query.message.delete()
     except Exception:
         pass
-    await callback_query.answer("Returning to active invoice...")
+
+    await callback_query.answer("❌ Payment session cancelled.", show_alert=True)
+
+    # Resend the payment menu screen as a clean new message
+    lang = await get_user_lang(user_id)
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("₿ Bitcoin (BTC)", callback_data="select_method_btc")],
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="main_start_menu")]
+    ])
+    text = get_string("select_method", lang=lang)
+    await client.send_message(user_id, text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^resume_btc_inv_"))
+async def resume_btc_inv_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    lang = await get_user_lang(user_id)
+    inv_id = callback_query.data.split("_")[-1]
+
+    from bson import ObjectId
+    try:
+        invoice = await btc_payments_col.find_one({"_id": ObjectId(inv_id)})
+    except Exception:
+        invoice = None
+
+    if not invoice or invoice.get("is_claimed"):
+        await callback_query.answer("Invoice no longer active.", show_alert=True)
+        return
+
+    plan_id = invoice.get("plan_id", "default")
+    if plan_id == "default":
+        price_usd = invoice.get("price_usd", 3.99)
+        plan = {"name": "Monthly Plan", "days": 30}
+    else:
+        plan = await plans_col.find_one({"plan_id": plan_id}) or {"name": "Monthly Plan", "days": 30}
+        price_usd = invoice.get("price_usd", 3.99)
+
+    btc_address = invoice["address"]
+    btc_amount = invoice["btc_amount"]
+    expiry_dt = invoice["expires_at"]
+    if expiry_dt.tzinfo is None:
+        expiry_dt = pytz.utc.localize(expiry_dt)
+
+    expiry_str = expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
+    text = get_string("btc_instr", lang=lang, plan_name=plan["name"], days=plan["days"], btc_amount=btc_amount, price_usd=price_usd, address=btc_address, expiry_str=expiry_str)
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton(get_string("btn_check_btc", lang=lang), callback_data=f"check_btc_{inv_id}")],
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data=f"ask_cancel_btc_{inv_id}")]
+    ])
+
+    try:
+        await callback_query.edit_message_caption(text, reply_markup=keyboard)
+    except Exception:
+        await callback_query.edit_message_text(text, reply_markup=keyboard)
+    await callback_query.answer("Returned to active invoice.")
 
 @Client.on_callback_query(filters.regex("^check_btc_"))
 async def check_btc_payment_handler(client, callback_query):

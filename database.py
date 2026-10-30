@@ -16,6 +16,38 @@ btc_payments_col = db.btc_payments # Bitcoin invoices & payments
 settings_col = db.settings
 admins_col = db.admins  # Store admin IDs
 
+# In-memory settings cache for high-throughput read operations
+_settings_cache = {}
+
+async def create_db_indexes():
+    """Creates database indexes to optimize query performance and enforce uniqueness."""
+    try:
+        # Users indexes
+        await users_col.create_index("user_id", unique=True)
+        await users_col.create_index("is_premium")
+        await users_col.create_index("premium_until")
+
+        # Plans indexes
+        await plans_col.create_index("plan_id", unique=True)
+
+        # Payments indexes
+        await payments_col.create_index([("txn_id", 1), ("amount", 1)])
+        await payments_col.create_index("is_claimed")
+        await payments_col.create_index("claimed_by")
+
+        # Bitcoin Payments indexes
+        await btc_payments_col.create_index([("user_id", 1), ("plan_id", 1), ("is_claimed", 1)])
+        await btc_payments_col.create_index("address")
+        await btc_payments_col.create_index("expires_at")
+
+        # Settings index
+        await settings_col.create_index("key", unique=True)
+
+        # Admins index
+        await admins_col.create_index("user_id", unique=True)
+    except Exception as e:
+        print(f"Warning: Exception while creating DB indexes: {e}")
+
 async def init_settings():
     """Initializes default settings in the database if not present."""
     default_settings = {
@@ -47,11 +79,28 @@ async def init_settings():
             await settings_col.update_one({"key": key}, {"$setOnInsert": {"value": value}}, upsert=True)
 
 async def get_setting(key, default=None):
+    if key in _settings_cache:
+        return _settings_cache[key]
     setting = await settings_col.find_one({"key": key})
-    return setting["value"] if setting else default
+    val = setting["value"] if setting else default
+    _settings_cache[key] = val
+    return val
 
 async def set_setting(key, value):
+    _settings_cache[key] = value
     await settings_col.update_one({"key": key}, {"$set": {"value": value}}, upsert=True)
+
+async def get_and_inc_btc_index():
+    """Atomically retrieves and increments the BTC address derivation index."""
+    res = await settings_col.find_one_and_update(
+        {"key": "btc_address_index"},
+        {"$inc": {"value": 1}},
+        upsert=True,
+        return_document=True
+    )
+    new_val = res.get("value", 1)
+    _settings_cache["btc_address_index"] = new_val
+    return new_val - 1
 
 async def is_admin(user_id):
     if user_id == OWNER_ID:

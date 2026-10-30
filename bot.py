@@ -74,13 +74,15 @@ async def main():
         print("CRITICAL: BOT_TOKEN, API_ID, or API_HASH is missing!")
         return
 
-    # Initialize settings in DB
+    # Initialize settings and indexes in DB
     try:
         masked_uri = MONGO_URI.split("@")[-1] if MONGO_URI else "None"
         print(f"Connecting to MongoDB: {DB_NAME} (Host: {masked_uri})")
         await db.command("ping")
+        from database import create_db_indexes
+        await create_db_indexes()
         await init_settings()
-        print("MongoDB connected and settings initialized.")
+        print("MongoDB connected, indexes created, and settings initialized.")
     except Exception as e:
         print(f"CRITICAL: Failed to connect to MongoDB: {e}")
         print("Please check your MONGO_URI and ensure your IP is whitelisted in Atlas.")
