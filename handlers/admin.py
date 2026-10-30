@@ -11,22 +11,60 @@ async def admin_help_handler(client, message):
         return
     await show_admin_dashboard(client, message, user_id, is_edit=False)
 
+@Client.on_message(filters.command(["admincmds", "adminhelp"]) & filters.private)
+async def admin_cmds_list_handler(client, message):
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+    await show_admin_commands_list(message, is_edit=False)
+
+async def show_admin_commands_list(message_or_query, is_edit=True):
+    text = "👑 **Bot Admin Commands List**\n\n"
+    text += "• `/admin` / `/help_admin` — Open Interactive Admin Control Dashboard\n"
+    text += "• `/admincmds` / `/adminhelp` — Display this list of all admin commands\n"
+    text += "• `/stats` — View bot statistics (Users, Premium Users, Revenue)\n"
+    text += "• `/managesub` — Subscription Plan Manager (Add, Edit, List, Delete plans)\n"
+    text += "• `/btcsettings` — Configure Bitcoin / XPUB key, address index & expiry\n"
+    text += "• `/premiumusers` — View active premium users & detailed payment histories\n"
+    text += "• `/setprice <inr>` or `/setprice usd <usd>` — Update default fallback price\n"
+    text += "• `/setdatabase` — Set image database channel (reply to forwarded message)\n"
+    text += "• `/setwelcome <en/hi> <text>` — Set custom localized welcome message\n"
+    text += "• `/setsuccess <en/hi> <text>` — Set custom localized payment success message\n"
+    text += "• `/setinstr <en/hi> <text>` — Set custom localized payment instruction text\n"
+    text += "• `/addpayment <txn_id> <amount>` — Manually record a payment\n"
+    text += "• `/addadmin <user_id>` — Add a new bot administrator (Owner only)\n"
+    text += "• `/debug` — Display system configuration & environment debug info\n"
+
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back_dashboard")]
+    ])
+
+    if is_edit:
+        await message_or_query.edit_message_text(text, reply_markup=keyboard)
+    else:
+        await message_or_query.reply_text(text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^admin_dashboard_cmds$"))
+async def admin_dashboard_cmds_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    if not await is_admin(user_id):
+        return
+    await show_admin_commands_list(callback_query.message, is_edit=True)
+
 async def show_admin_dashboard(client, message_or_query, user_id, is_edit=True):
     total_users, premium_users, revenue = await get_db_stats()
     price_usd = await get_setting("price_usd", 3.99)
     btc_xpub = await get_setting("btc_xpub", "")
-    xmr_addr = await get_setting("xmr_address", "")
 
     text = "👑 **Admin Control Dashboard**\n\n"
     text += f"📊 **Stats:** Users: `{total_users}` | Premium: `{premium_users}`\n"
     text += f"💵 **Default Price:** `${price_usd:.2f}` USD\n"
-    text += f"₿ **Bitcoin XPUB:** `{'Configured ✅' if btc_xpub else 'Not Set ❌'}`\n"
-    text += f"🔒 **Monero (XMR):** `{'Configured ✅' if xmr_addr else 'Not Set ❌'}`\n\n"
+    text += f"₿ **Bitcoin XPUB:** `{'Configured ✅' if btc_xpub else 'Not Set ❌'}`\n\n"
     text += "Select an option below to configure your bot:"
 
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton("💎 Plan Manager", callback_data="admin_add_plan"), types.InlineKeyboardButton("📜 List Plans", callback_data="admin_list_plans")],
-        [types.InlineKeyboardButton("₿ Bitcoin Settings", callback_data="admin_back_btc_settings"), types.InlineKeyboardButton("🔒 Monero Settings", callback_data="admin_back_xmr_settings")],
+        [types.InlineKeyboardButton("₿ Bitcoin Settings", callback_data="admin_back_btc_settings"), types.InlineKeyboardButton("📋 Admin Cmds", callback_data="admin_dashboard_cmds")],
         [types.InlineKeyboardButton("👥 Premium Users", callback_data="admin_back_premium"), types.InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_dashboard_stats")],
         [types.InlineKeyboardButton("🔎 Debug Info", callback_data="admin_dashboard_debug")]
     ])
@@ -247,16 +285,12 @@ async def debug_handler(client, message):
     btc_idx = await get_setting("btc_address_index", 0)
     btc_expiry = await get_setting("btc_expiry_minutes", 60)
 
-    xmr_addr = await get_setting("xmr_address", "")
-    xmr_expiry = await get_setting("xmr_expiry_minutes", 60)
-
     debug_text = "🔎 **Bot Debug Info:**\n\n"
     debug_text += f"💵 **Default Price (USD):** ${price_usd:.2f}\n"
     debug_text += f"🖼 **Image DB:** `{img_db}`\n"
     debug_text += f"₿ **Bitcoin XPUB:** `{btc_xpub[:15]}...` ({'Configured' if btc_xpub else 'Not Set'})\n"
     debug_text += f"🔢 **BTC Address Index:** `{btc_idx}`\n"
-    debug_text += f"🔒 **Monero Address:** `{xmr_addr[:15]}...` ({'Configured' if xmr_addr else 'Not Set'})\n"
-    debug_text += f"⏱ **Invoice Expiry:** BTC: `{btc_expiry}`m | XMR: `{xmr_expiry}`m\n"
+    debug_text += f"⏱ **Invoice Expiry:** BTC: `{btc_expiry}`m\n"
     debug_text += f"👑 **Owner ID:** `{OWNER_ID}`\n"
 
     await message.reply_text(debug_text)
@@ -588,7 +622,14 @@ async def admin_list_plans_callback(client, callback_query):
 
     plans = await plans_col.find().to_list(100)
     if not plans:
-        await callback_query.answer("No plans found.", show_alert=True)
+        keyboard = [
+            [types.InlineKeyboardButton("➕ Add Plan", callback_data="admin_add_plan")],
+            [types.InlineKeyboardButton("🔙 Back", callback_data="admin_managesub_back")]
+        ]
+        await callback_query.edit_message_text(
+            "📜 **Existing Plans:**\n\nℹ️ No plans found in database. Click '➕ Add Plan' to create one.",
+            reply_markup=types.InlineKeyboardMarkup(keyboard)
+        )
         return
 
     keyboard = []
@@ -598,6 +639,7 @@ async def admin_list_plans_callback(client, callback_query):
             types.InlineKeyboardButton(f"{plan['name']} (${p_usd:.2f})", callback_data=f"admin_view_plan_{plan['plan_id']}")
         ])
 
+    keyboard.append([types.InlineKeyboardButton("➕ Add Plan", callback_data="admin_add_plan")])
     keyboard.append([types.InlineKeyboardButton("🔙 Back", callback_data="admin_managesub_back")])
 
     await callback_query.edit_message_text("📜 **Existing Plans:**\n\nClick on a plan to edit or delete it.", reply_markup=types.InlineKeyboardMarkup(keyboard))
@@ -774,96 +816,6 @@ async def admin_back_btc_settings_callback(client, callback_query):
         return
     await show_btc_settings_menu(client, callback_query.message, user_id, is_edit=True)
 
-# Monero Admin Controls
-
-@Client.on_message(filters.command("xmrsettings") & filters.private)
-async def xmr_settings_handler(client, message):
-    user_id = message.from_user.id
-    if not await is_admin(user_id):
-        return
-    await show_xmr_settings_menu(client, message, user_id, is_edit=False)
-
-async def show_xmr_settings_menu(client, message_or_query, user_id, is_edit=True):
-    xmr_addr = await get_setting("xmr_address", "")
-    xmr_expiry = await get_setting("xmr_expiry_minutes", 60)
-
-    from database import xmr_payments_col
-    total_xmr_payments = await xmr_payments_col.count_documents({"is_claimed": True})
-
-    text = "🔒 **Monero (XMR) Settings**\n\n"
-    text += f"📍 **Deposit Address:**\n`{xmr_addr if xmr_addr else 'Not Configured'}`\n\n"
-    text += f"⏱ **Invoice Expiry Duration:** `{xmr_expiry}` Minutes\n"
-    text += f"✅ **Total Verified XMR Payments:** `{total_xmr_payments}`\n"
-
-    keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton("📍 Set / Change Monero Address", callback_data="admin_set_xmr_address")],
-        [types.InlineKeyboardButton("⏱ Set Expiry Minutes", callback_data="admin_set_xmr_expiry")],
-        [types.InlineKeyboardButton("📜 View XMR Payments", callback_data="admin_list_xmr_payments")],
-        [types.InlineKeyboardButton("🔙 Dashboard", callback_data="admin_back_dashboard")]
-    ])
-
-    if is_edit:
-        await message_or_query.edit_message_text(text, reply_markup=keyboard)
-    else:
-        await message_or_query.reply_text(text, reply_markup=keyboard)
-
-@Client.on_callback_query(filters.regex("^admin_set_xmr_"))
-async def xmr_admin_callback_handler(client, callback_query):
-    user_id = callback_query.from_user.id
-    if not await is_admin(user_id):
-        return
-
-    data = callback_query.data
-    if data == "admin_set_xmr_address":
-        await users_col.update_one({"user_id": user_id}, {"$set": {"state": "admin_setting_xmr_address"}})
-        await callback_query.message.reply_text(
-            "🔒 **Send Monero Address**\n\n"
-            "Please send your Monero primary address or subaddress (`4...` or `8...`)."
-        )
-        await callback_query.answer()
-    elif data == "admin_set_xmr_expiry":
-        await users_col.update_one({"user_id": user_id}, {"$set": {"state": "admin_setting_xmr_expiry"}})
-        await callback_query.message.reply_text(
-            "⏱ **Send Invoice Expiry Duration**\n\n"
-            "Please enter the duration in minutes for Monero invoice expiry (e.g. `60`)."
-        )
-        await callback_query.answer()
-
-@Client.on_callback_query(filters.regex("^admin_list_xmr_payments$"))
-async def admin_list_xmr_payments_callback(client, callback_query):
-    user_id = callback_query.from_user.id
-    if not await is_admin(user_id):
-        return
-
-    from database import xmr_payments_col
-    xmr_payments = await xmr_payments_col.find({"is_claimed": True}).sort("claimed_at", -1).to_list(50)
-
-    if not xmr_payments:
-        await callback_query.answer("No completed Monero payments found.", show_alert=True)
-        return
-
-    text = "🔒 **Monero Payments History:**\n\n"
-    for p in xmr_payments:
-        uid = p.get("user_id")
-        xmr_val = p.get("xmr_amount")
-        addr = p.get("address")
-        txid = p.get("txid", "N/A")
-        date = p.get("claimed_at").strftime("%Y-%m-%d %H:%M UTC") if p.get("claimed_at") else "N/A"
-        text += f"• User `{uid}` | `{xmr_val:.6f} XMR`\n  Addr: `{addr}`\n  TX: `{txid}` | {date}\n\n"
-
-    keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton("🔙 Back to Monero Settings", callback_data="admin_back_xmr_settings")]
-    ])
-
-    await callback_query.edit_message_text(text, reply_markup=keyboard)
-
-@Client.on_callback_query(filters.regex("^admin_back_xmr_settings$"))
-async def admin_back_xmr_settings_callback(client, callback_query):
-    user_id = callback_query.from_user.id
-    if not await is_admin(user_id):
-        return
-    await show_xmr_settings_menu(client, callback_query.message, user_id, is_edit=True)
-
 # Input handler for admin settings
 @Client.on_message(filters.private & filters.text, group=1)
 async def admin_input_handler(client, message):
@@ -891,28 +843,6 @@ async def admin_input_handler(client, message):
             )
         except Exception as e:
             await message.reply_text(f"❌ **Invalid XPUB Key!** Error: {e}\nPlease check your xpub/zpub key and try again.")
-        return
-
-    elif state == "admin_setting_xmr_address":
-        xmr_text = message.text.strip()
-        if len(xmr_text) < 90 or not (xmr_text.startswith("4") or xmr_text.startswith("8")):
-            await message.reply_text("❌ Invalid Monero address. Address should start with '4' or '8' and be ~95 characters.")
-            return
-        await set_setting("xmr_address", xmr_text)
-        await users_col.update_one({"user_id": user_id}, {"$unset": {"state": ""}})
-        await message.reply_text(f"✅ **Monero Address Saved Successfully!**\n\nAddress:\n`{xmr_text}`")
-        return
-
-    elif state == "admin_setting_xmr_expiry":
-        try:
-            exp_mins = int(message.text.strip())
-            if exp_mins <= 0:
-                raise ValueError()
-            await set_setting("xmr_expiry_minutes", exp_mins)
-            await users_col.update_one({"user_id": user_id}, {"$unset": {"state": ""}})
-            await message.reply_text(f"✅ **Monero invoice expiry set to {exp_mins} minutes.**")
-        except ValueError:
-            await message.reply_text("❌ Please enter a valid positive number of minutes.")
         return
 
     elif state == "admin_setting_btc_expiry":

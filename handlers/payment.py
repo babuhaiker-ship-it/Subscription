@@ -1,8 +1,7 @@
 from pyrogram import Client, filters, types
-from database import users_col, payments_col, btc_payments_col, xmr_payments_col, get_setting, set_setting, main_tokens_col, main_users_col, plans_col
+from database import users_col, payments_col, btc_payments_col, get_setting, set_setting, main_tokens_col, main_users_col, plans_col
 from utils.localization import get_string
 from utils.btc import derive_btc_address, inr_to_btc, usd_to_btc, check_btc_address_transactions
-from utils.xmr import usd_to_xmr
 from datetime import datetime, timedelta
 import pytz
 import asyncio
@@ -52,11 +51,9 @@ async def btc_payment_init_handler(client, callback_query):
         expiry_dt = active_inv["expires_at"]
         inv_id = str(active_inv["_id"])
     else:
-        # Atomic increment of index
-        settings_doc = await db_get_and_inc_btc_index() if 'db_get_and_inc_btc_index' in globals() else None
-        # Retrieve current index and increment
-        curr_index = await get_setting("btc_address_index", 0)
-        await set_setting("btc_address_index", curr_index + 1)
+        # Atomic increment of index to eliminate race conditions
+        from database import get_and_inc_btc_index
+        curr_index = await get_and_inc_btc_index()
 
         try:
             btc_address = derive_btc_address(xpub, curr_index)
@@ -91,7 +88,7 @@ async def btc_payment_init_handler(client, callback_query):
 
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton(get_string("btn_check_btc", lang=lang), callback_data=f"check_btc_{inv_id}")],
-        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="get_premium")]
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data=f"ask_cancel_btc_{inv_id}")]
     ])
 
     # Send QR image with invoice caption or edit message text
@@ -120,124 +117,104 @@ async def btc_payment_init_handler(client, callback_query):
         from handlers.user import delete_after
         asyncio.create_task(delete_after(sent_msg, delay_seconds))
 
-@Client.on_callback_query(filters.regex("^pay_xmr_"))
-async def xmr_payment_init_handler(client, callback_query):
+@Client.on_callback_query(filters.regex("^ask_cancel_btc_"))
+async def ask_cancel_btc_handler(client, callback_query):
     user_id = callback_query.from_user.id
-    lang = await get_user_lang(user_id)
-    plan_id = callback_query.data.split("_")[-1]
+    inv_id = callback_query.data.split("_")[-1]
 
-    if plan_id == "default":
-        price_inr = await get_setting("price", 199)
-        price_usd = await get_setting("price_usd", 3.99)
-        days = 30
-        plan = {"name": "Monthly Plan", "price": price_inr, "price_usd": price_usd, "days": days, "plan_id": "default"}
-    else:
-        plan = await plans_col.find_one({"plan_id": plan_id})
-        if not plan:
-            await callback_query.answer("Plan not found.", show_alert=True)
-            return
-        price_inr = plan["price"]
-        price_usd = plan.get("price_usd", round(price_inr / 88.0, 2))
-        days = plan["days"]
-
-    xmr_address = await get_setting("xmr_address", "")
-    if not xmr_address:
-        await callback_query.answer("❌ Monero payment method is currently disabled or address is not configured by admin.", show_alert=True)
-        return
-    expiry_minutes = await get_setting("xmr_expiry_minutes", 60)
-
-    now_utc = datetime.now(pytz.utc)
-    active_inv = await xmr_payments_col.find_one({
-        "user_id": user_id,
-        "plan_id": plan_id,
-        "is_claimed": False,
-        "expires_at": {"$gt": now_utc}
-    })
-
-    if active_inv:
-        xmr_amount = active_inv["xmr_amount"]
-        expiry_dt = active_inv["expires_at"]
-        inv_id = str(active_inv["_id"])
-    else:
-        xmr_amount = await usd_to_xmr(price_usd)
-        expiry_dt = now_utc + timedelta(minutes=expiry_minutes)
-
-        inv_doc = {
-            "user_id": user_id,
-            "plan_id": plan_id,
-            "address": xmr_address,
-            "xmr_amount": xmr_amount,
-            "price_usd": price_usd,
-            "created_at": now_utc,
-            "expires_at": expiry_dt,
-            "is_claimed": False
-        }
-        res = await xmr_payments_col.insert_one(inv_doc)
-        inv_id = str(res.inserted_id)
-
-    expiry_str = expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
-    text = get_string("xmr_instr", lang=lang, plan_name=plan["name"], days=days, xmr_amount=xmr_amount, price_usd=price_usd, address=xmr_address, expiry_str=expiry_str)
-
-    qr_code_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=monero:{xmr_address}?tx_amount={xmr_amount:.6f}"
+    text = (
+        "⚠️ **Cancel Payment Invoice?**\n\n"
+        "Are you sure you want to cancel this invoice?\n\n"
+        "• If you have already sent Bitcoin, tap **'No, Return to Invoice'** and check payment status.\n"
+        "• If you haven't sent funds, it is safe to cancel."
+    )
 
     keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton(get_string("btn_check_xmr", lang=lang), callback_data=f"check_xmr_{inv_id}")],
-        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="get_premium")]
+        [types.InlineKeyboardButton("❌ Yes, Cancel Session", callback_data=f"confirm_cancel_btc_{inv_id}")],
+        [types.InlineKeyboardButton("🔙 No, Return to Invoice", callback_data=f"resume_btc_inv_{inv_id}")]
     ])
 
-    sent_msg = None
     try:
-        sent_msg = await client.send_photo(
-            chat_id=user_id,
-            photo=qr_code_url,
-            caption=text,
-            reply_markup=keyboard
+        await callback_query.edit_message_caption(text, reply_markup=keyboard)
+    except Exception:
+        await callback_query.edit_message_text(text, reply_markup=keyboard)
+    await callback_query.answer()
+
+@Client.on_callback_query(filters.regex("^confirm_cancel_btc_"))
+async def confirm_cancel_btc_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    inv_id = callback_query.data.split("_")[-1]
+
+    from bson import ObjectId
+    try:
+        # Mark invoice as expired/cancelled in database
+        await btc_payments_col.update_one(
+            {"_id": ObjectId(inv_id), "user_id": user_id, "is_claimed": False},
+            {"$set": {"expires_at": datetime.now(pytz.utc) - timedelta(minutes=1)}}
         )
-        try:
-            await callback_query.message.delete()
-        except Exception:
-            pass
     except Exception as e:
-        logger.warning(f"Could not send XMR QR photo: {e}, falling back to text edit")
-        try:
-            sent_msg = await callback_query.edit_message_text(text, reply_markup=keyboard)
-        except Exception as edit_err:
-            logger.error(f"Fallback edit failed: {edit_err}")
+        logger.error(f"Error cancelling invoice {inv_id}: {e}")
 
-    delay_seconds = int((expiry_dt - now_utc).total_seconds())
-    if delay_seconds > 0 and sent_msg:
-        from handlers.user import delete_after
-        asyncio.create_task(delete_after(sent_msg, delay_seconds))
+    # Delete the QR photo message completely
+    try:
+        await callback_query.message.delete()
+    except Exception:
+        pass
 
-@Client.on_callback_query(filters.regex("^check_xmr_"))
-async def check_xmr_payment_handler(client, callback_query):
+    await callback_query.answer("❌ Payment session cancelled.", show_alert=True)
+
+    # Resend the payment menu screen as a clean new message
+    lang = await get_user_lang(user_id)
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("₿ Bitcoin (BTC)", callback_data="select_method_btc")],
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data="main_start_menu")]
+    ])
+    text = get_string("select_method", lang=lang)
+    await client.send_message(user_id, text, reply_markup=keyboard)
+
+@Client.on_callback_query(filters.regex("^resume_btc_inv_"))
+async def resume_btc_inv_handler(client, callback_query):
     user_id = callback_query.from_user.id
     lang = await get_user_lang(user_id)
     inv_id = callback_query.data.split("_")[-1]
 
     from bson import ObjectId
     try:
-        invoice = await xmr_payments_col.find_one({"_id": ObjectId(inv_id)})
+        invoice = await btc_payments_col.find_one({"_id": ObjectId(inv_id)})
     except Exception:
         invoice = None
 
-    if not invoice:
-        await callback_query.answer("❌ Invoice not found.", show_alert=True)
+    if not invoice or invoice.get("is_claimed"):
+        await callback_query.answer("Invoice no longer active.", show_alert=True)
         return
 
-    if invoice.get("is_claimed"):
-        await callback_query.answer("✅ This Monero payment has already been verified!", show_alert=True)
-        return
+    plan_id = invoice.get("plan_id", "default")
+    if plan_id == "default":
+        price_usd = invoice.get("price_usd", 3.99)
+        plan = {"name": "Monthly Plan", "days": 30}
+    else:
+        plan = await plans_col.find_one({"plan_id": plan_id}) or {"name": "Monthly Plan", "days": 30}
+        price_usd = invoice.get("price_usd", 3.99)
 
-    now_utc = datetime.now(pytz.utc)
-    if invoice.get("expires_at") and invoice["expires_at"].tzinfo is None:
-        invoice["expires_at"] = pytz.utc.localize(invoice["expires_at"])
+    btc_address = invoice["address"]
+    btc_amount = invoice["btc_amount"]
+    expiry_dt = invoice["expires_at"]
+    if expiry_dt.tzinfo is None:
+        expiry_dt = pytz.utc.localize(expiry_dt)
 
-    if now_utc > invoice["expires_at"]:
-        await callback_query.answer("❌ This Monero payment invoice has expired. Please select a plan again.", show_alert=True)
-        return
+    expiry_str = expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
+    text = get_string("btc_instr", lang=lang, plan_name=plan["name"], days=plan["days"], btc_amount=btc_amount, price_usd=price_usd, address=btc_address, expiry_str=expiry_str)
 
-    await callback_query.answer("⏳ Please send transaction hash/ID or contact admin after sending XMR.", show_alert=True)
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton(get_string("btn_check_btc", lang=lang), callback_data=f"check_btc_{inv_id}")],
+        [types.InlineKeyboardButton(get_string("btn_back", lang=lang), callback_data=f"ask_cancel_btc_{inv_id}")]
+    ])
+
+    try:
+        await callback_query.edit_message_caption(text, reply_markup=keyboard)
+    except Exception:
+        await callback_query.edit_message_text(text, reply_markup=keyboard)
+    await callback_query.answer("Returned to active invoice.")
 
 @Client.on_callback_query(filters.regex("^check_btc_"))
 async def check_btc_payment_handler(client, callback_query):
@@ -547,4 +524,8 @@ async def payment_submission_handler(client, message):
         else:
             error_text = get_string("error_not_found", lang=lang)
 
-        await verifying_msg.edit_text(error_text)
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("🔄 Try Again", callback_data="i_have_paid")],
+            [types.InlineKeyboardButton("🔙 Cancel", callback_data="get_premium")]
+        ])
+        await verifying_msg.edit_text(error_text, reply_markup=keyboard)
